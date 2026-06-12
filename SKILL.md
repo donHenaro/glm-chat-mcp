@@ -8,7 +8,7 @@ used-by:
  - "Code"
 ---
 # when refactoring, never make changes above this line.
-# GLM Chat MCP Skill v10.0 — Compact Edition
+# GLM Chat MCP Skill v11.0 — Tested Edition
 ---
 
 ## 🔴 Обязательная активация
@@ -66,18 +66,25 @@ used-by:
 
 ### 6. Ожидание ответа — двухфазный детектор
 
-**Фаза 1 (0-15 сек):** Ждём Stop → генерация началась
-**Фаза 2 (до timeout):** Ждём Copy/Regenerate стабильны 3 сек → ответ готов
+**Фаза 1 (0-15 сек):** Ждём spinner или Stop → генерация началась
+**Фаза 2 (до timeout):** Ждём 2+ SVG-кнопки (Copy+Regenerate) стабильны 3 сек → ответ готов
 
-⚠️ Agent Mode: между tool calls кнопки могут мигнуть — подождать 3 сек и перепроверить.
+⚠️ GLM кнопки — **SVG-иконки без текста**, без title, без aria-label!
+⚠️ Agent Mode: между tool calls кнопки мигают — подождать 3 сек и перепроверить.
+⚠️ Agent Mode может ЗАВИСНУТЬ: нет spinner, нет Stop, нет Copy → **открыть новый чат**
 
 **Фаза 1 не прошла за 15 сек?** Проверить: ошибка в DOM? редирект на /login? retry 1 раз.
 
 ### 7. Прочитать ответ и записать лог
 ```javascript
-// ⚠️ .chat-assistant — Svelte класс, может измениться. Используем .markdown-prose напрямую
+// browser_evaluate — GLM Copy/Regenerate detection (проверенный)
 const prose = document.querySelectorAll('.markdown-prose');
-const text = prose[prose.length - 1]?.innerText || '';
+const last = prose[prose.length - 1];
+if (!last) return { done: false };
+const parent = last.closest('[class*="message"]') || last.parentElement?.parentElement;
+const btns = parent ? parent.querySelectorAll('button') : [];
+const actionBtns = Array.from(btns).filter(b => b.className.includes('visible') && b.querySelector('svg'));
+return { done: actionBtns.length >= 2, text: last.innerText };
 ```
 
 ---
@@ -95,12 +102,27 @@ const text = prose[prose.length - 1]?.innerText || '';
 
 ### Селекторы по провайдерам
 
+**⚠️ GLM кнопки — SVG-иконки без текста!** Нет `title`, нет `aria-label`, нет текста. Определяются по SVG path или позиции.
+
 | Сигнал | GLM | Qwen | DeepSeek |
 |--------|-----|------|----------|
-| Генерация идёт | Stop видна через snapshot | `button:has-text("Stop")` | `button:has-text("Stop")` |
+| Генерация идёт | spinner `[class*="spinner"]` или Stop через snapshot | `button:has-text("Stop")` | `button:has-text("Stop")` |
 | Thinking | `[class*="thinking"]` | `"Generating..."` | `[class*="thinking"]` |
-| Готово | `button[class*="copy"]` стабильно 3 сек | `button:has-text("Copy")` | `button:has-text("Copy")` |
+| Готово | **2 SVG-кнопки** в `.markdown-prose` parent: кнопка[0]=Copy, кнопка[1]=Regenerate | `button:has-text("Copy")` | `button:has-text("Copy")` |
 | Ошибка | красный toast/alert | текст в сообщении | красный баннер |
+
+**GLM детектор готовности (проверенный):**
+```javascript
+// browser_evaluate — GLM Copy/Regenerate detection
+const prose = document.querySelectorAll('.markdown-prose');
+const last = prose[prose.length - 1];
+if (!last) return { done: false };
+const parent = last.closest('[class*="message"]') || last.parentElement?.parentElement;
+const btns = parent ? parent.querySelectorAll('button') : [];
+// Кнопки Copy/Regenerate = SVG-иконки, без текста, видимые
+const actionBtns = Array.from(btns).filter(b => b.className.includes('visible') && b.querySelector('svg'));
+return { done: actionBtns.length >= 2, btnCount: actionBtns.length, textLen: last.innerText.length };
+```
 
 ### Прогресс-модель (5 фаз ожидания)
 
@@ -139,12 +161,15 @@ const text = prose[prose.length - 1]?.innerText || '';
 ### Прогресс-мониторинг (читать ход Agent Mode)
 ```javascript
 // browser_evaluate — понимать что происходит
-const thought = document.querySelector('[class*="thinking-chain"]')?.innerText || '';
+const thought = document.querySelector('[class*="thinking"]')?.innerText || '';
 const toolCalls = document.querySelectorAll('[class*="tool-call"]');
 const prose = document.querySelectorAll('.markdown-prose');
 const mainText = prose[prose.length - 1]?.innerText || '';
-const hasCopy = !!document.querySelector('button[class*="copy"]');
-return { thought: thought.slice(0,200), tools: toolCalls.length, textLen: mainText.length, done: hasCopy };
+const parent = prose[prose.length-1]?.closest('[class*="message"]') || prose[prose.length-1]?.parentElement?.parentElement;
+const btns = parent ? parent.querySelectorAll('button') : [];
+const actionBtns = Array.from(btns).filter(b => b.className.includes('visible') && b.querySelector('svg'));
+const spinner = !!document.querySelector('[class*="spinner"]');
+return { thought: thought.slice(0,200), tools: toolCalls.length, textLen: mainText.length, done: actionBtns.length >= 2, spinner };
 ```
 
 ### Сценарий 1: Анализ файлов
@@ -291,6 +316,7 @@ await page.locator('button[class*="invisible"]').first().click();
 | Session expired (→ /login) | Уведомить пользователя, НЕ пытаться логиниться |
 | Empty response (текст пустой) | Retry 1 раз, если снова пустой → ошибка |
 | Partial response (обрыв кода) | Проверить `[class*="error"]` в DOM: есть → retry, нет → вернуть что есть + предупреждение |
+| **Agent Mode завис** (нет spinner, нет Stop, нет Copy, textarea заблокирован) | **Открыть новый чат** (`chat.z.ai/`), НЕ пытаться реанимировать |
 | Copy/Regenerate мигнули и исчезли | Agent Mode — продолжить ожидание |
 | beforeunload диалог | Закрыть вкладку, открыть заново |
 | Редирект на /login | Предупредить пользователя — нужна авторизация |
