@@ -1,23 +1,22 @@
 # GLM Chat Log — 2026-06-12
 
-| Дата | Время | UUID | Тема | URL | Провайдер | Mode | Статус |
-|------|-------|------|------|-----|-----------|------|--------|
-| 2026-06-12 | 12:04 | 74d5700a | Интеграция webchat2api — архитектура | https://chat.z.ai/c/74d5700a | GLM | PW | ✅ |
-| 2026-06-12 | 12:16 | b534fd07 | GLM chat.py реализация | https://chat.z.ai/c/b534fd07 | GLM | PW | ✅ |
-| 2026-06-12 | 12:22 | e8238dd0 | Точный API формат GLM | https://chat.z.ai/c/e8238dd0 | GLM | PW | ✅ |
+| Дата | Время | UUID | Тема | URL | Провайдер | Режим | Статус |
+|------|-------|------|------|-----|-----------|-------|--------|
+| 2026-06-12 | 12:04 | 74d5700a | Архитектура dual-mode | https://chat.z.ai/c/74d5700a | GLM | Chat | ✅ |
+| 2026-06-12 | 12:16 | b534fd07 | GLM chat.py реализация | https://chat.z.ai/c/b534fd07 | GLM | Agent | ✅ |
+| 2026-06-12 | 12:22 | e8238dd0 | Точный API формат + Agent Mode | https://chat.z.ai/c/e8238dd0 | GLM | Agent | ✅ |
+| 2026-06-12 | 12:30 | dc86dc90 | x-signature (отказ) | https://chat.z.ai/c/dc86dc90 | GLM | Agent | ✅ |
+| 2026-06-12 | 13:00 | 1920e7ee | Рефакторинг скилла — план | https://chat.z.ai/c/1920e7ee | GLM | DeepThink | ⏳ |
 
-## Консультация 3: Точный API формат GLM (UUID: e8238dd0)
+## Консультация 5: Рефакторинг скилла (UUID: 1920e7ee)
 
-### Ключевые находки
+### Ключевые рекомендации GLM:
 
-1. **API Endpoint:** `POST https://internal-api.z.ai/v1/chat/completions`
-2. **Обязательные заголовки:**
-   - `Authorization: Bearer Z.ai` (фиксированный!)
-   - `X-Token: <JWT>` (из localStorage)
-   - `X-User-Id: <user_uuid>`
-   - `X-Chat-Id: <chat_uuid>`
-   - `X-Z-AI-From: Z`
-3. **Deep Think:** `"thinking": {"type": "enabled"}`
-4. **Web Search:** `"tools": [{"type": "function", "function": {"name": "web_search"}}]`
-5. **SSE:** OpenAI-совместимый с `reasoning_content` в delta
-6. **Rate limits:** 300/day, 2 QPS, 30/10min
+1. **Copy/Regenerate — надёжнейший индикатор** — пост-рендерный сигнал
+2. **bubble-reading (15с stability) — ХУДШИЙ вариант** — ложные срабатывания при Agent Mode
+3. **Двухфазный детектор:** Фаза 1 (Stop visible) → Фаза 2 (Copy/Regenerate stable 3 сек)
+4. **SKILL.md < 400 строк** — вынести тех. справку в reference.md
+5. **Agent Mode awareness** — таймауты и прогресс-индикаторы
+6. **Унификация** — один workflow для всех провайдеров
+
+### Результат: SKILL.md сокращён с 756 до 214 строк (-72%)
