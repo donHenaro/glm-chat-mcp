@@ -185,9 +185,10 @@ const isDone = chunks.some(c => c.includes('"phase":"done"'));
 return { fullText, isDone };
 ```
 
-### Стратегия B: Прямой API-запрос (для Qwen)
+### Стратегия B: Прямой API-запрос (НЕ рекомендуется)
 
-Qwen **не использует signature или PoW** — можно делать прямые fetch-запросы.
+Qwen использует **message tree** (parentId/childrenIds/fid) вместо простого массива messages —
+прямой API сложен в реализации. Рекомендуется SSE-перехват (Стратегия A).
 
 ---
 
@@ -217,32 +218,46 @@ data: {"type":"chat:completion","data":{"phase":"done","done":true,"metadata":{.
 
 ---
 
-### Qwen API (Alibaba) — прямой запрос
+### Qwen API (Alibaba) — через SSE-перехват (рекомендуемая)
 
-**Двухэтапный процесс:**
+⚠️ Прямой API Qwen **сложнее чем казалось** — messages требуют дерево (parentId/childrenIds/fid),
+а не простой массив. Рекомендуется SSE-перехват как для GLM.
 
-**Шаг 1:** Создать чат
+**Реальный формат перехваченного запроса:**
 ```
-POST https://chat.qwen.ai/api/v2/chats/new
-Authorization: Bearer <JWT>
-Body: {"title":"New Chat","models":["qwen-max-latest"],"chat_mode":"local","chat_type":"t2i","timestamp":<ms>}
-Response: {"data":{"id":"chat-uuid"}}
+POST /api/v2/chat/completions?chat_id=<uuid>
+Headers: Authorization: Bearer <JWT>, Version: 0.2.64, source: web, X-Accel-Buffering: no
+Body: {
+  "stream": true,
+  "version": "2.1",
+  "incremental_output": true,
+  "chat_id": "<uuid>",
+  "chat_mode": "normal",
+  "model": "qwen3.7-plus",
+  "messages": [{
+    "fid": "<uuid>", "parentId": "<uuid>", "childrenIds": ["<uuid>"],
+    "role": "user", "content": "...", "user_action": "chat",
+    "files": [], "timestamp": <unix>, "models": ["qwen3.7-plus"],
+    "chat_type": "t2t",
+    "feature_config": {
+      "thinking_enabled": true, "thinking_mode": "Auto",
+      "thinking_format": "summary", "auto_search": true
+    }
+  }]
+}
 ```
 
-**Шаг 2:** Chat completion
-```
-POST https://chat.qwen.ai/api/v2/chat/completions?chat_id=<chat_uuid>
-Authorization: Bearer <JWT>
-Headers: source:web, Version:0.1.13, bx-v:2.5.31, Origin:https://chat.qwen.ai
-Body: {"model":"qwen-max-latest","messages":[...],"stream":true,"chat_id":"<uuid>","web_search":false,"thinking":false}
-```
+**Шаг 1 (для прямого API):** `POST /api/v2/chats/new` с `models:["qwen3.7-plus"], chat_mode:"normal", chat_type:"t2t"`
+**Шаг 2:** `POST /api/v2/chat/completions?chat_id=<id>` с message tree
 
-**Режимы:**
+**Режимы через feature_config:**
 | Режим | Параметр |
 |-------|----------|
-| Обычный | `web_search:false, thinking:false` |
-| Web Search | `web_search:true` |
-| Reasoning | `thinking:true` + model `qwq-32b` |
+| Обычный | `thinking_enabled:false, auto_search:false` |
+| Web Search | `auto_search:true` |
+| Deep Think | `thinking_enabled:true, thinking_mode:"Deep"` |
+
+**Реальные модели Qwen:** `qwen3.7-plus`, `qwen3.7-max`, `qwen3.7-turbo`, `qwq-32b`
 
 ---
 
@@ -351,11 +366,12 @@ Authorization: Bearer <token>
 5. Ждать ответ: polling `window.__sseChunks` каждые 3-5 сек, пока не появится `phase:"done"`
 6. Парсить SSE chunks → извлечь `delta_content` → вернуть текст
 
-### Шаг 2. Qwen — Прямой API (Стратегия B)
+### Шаг 2. Qwen — SSE-перехват (Стратегия A)
 
-1. Извлечь токены из localStorage/cookies (см. секцию «Получение токенов»)
-2. Отправить fetch-запрос: сначала `chats/new`, потом `completions`
-3. Прочитать SSE stream или JSON ответ
+1. Переключиться на вкладку Qwen
+2. Установить SSE-перехватчик (аналогично GLM)
+3. Очистить буфер, отправить через UI, прочитать SSE
+4. Парсинг Qwen SSE — формат отличается от GLM, нужен анализ
 
 ### Шаг 3. DeepSeek — DOM-чтение (Стратегия A-variant)
 
