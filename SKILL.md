@@ -194,21 +194,39 @@ return clean;
 
 ### Сценарий 6: Получение файлов от GLM
 
-**Рекомендация GLM:** «Выводи содержимое прямо в чат, я сам сохраню» — самый простой способ.
+**Метод A: Blob-перехват (рекомендуется)** ✅ Протестировано
+GLM при клике Download создаёт blob через `URL.createObjectURL()` — перехватываем:
+```javascript
+// browser_evaluate — перехват blob + клик Download
+const result = await page.evaluate(() => {
+  return new Promise((resolve) => {
+    const orig = URL.createObjectURL;
+    URL.createObjectURL = function(blob) {
+      const blobUrl = orig.call(URL, blob);
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64 = reader.result.split(',')[1];
+        resolve({ success: true, type: blob.type, size: blob.size, content: atob(base64) });
+      };
+      reader.readAsDataURL(blob);
+      return blobUrl;
+    };
+    setTimeout(() => {
+      document.querySelector('button[title="Download file"]')?.click();
+      setTimeout(() => resolve({ error: 'timeout' }), 5000);
+    }, 100);
+  });
+});
+// result.content = декодированное содержимое файла → write_file()
+```
+**Протестировано:** Agent → result.json → blob-перехват → `{"status":"ok","count":42}` ✅
 
-**Метод A: Текст из чата (рекомендуется)** ✅ Протестировано
-1. Промпт: «Выведи содержимое файла прямо в чат. Укажи имя файла как `// filename='name.ext'`»
-2. GLM выводит код/данные как plain text в `.markdown-prose`
-3. `browser_evaluate`: прочитать `innerText`, убрать `Thought Process\n`, сохранить через `write_file()`
-⚠️ GLM **НЕ рендерит `<pre><code>`** — всё в plain text! `querySelectorAll('pre code')` → 0 результатов
+**Метод B: Текст из чата (fallback)**
+Промпт: «Покажи содержимое прямо в чат» → `innerText` → `write_file()`
+⚠️ GLM **НЕ рендерит `<pre><code>`** — всё в plain text
 
-**Метод B: Download кнопка (Agent Mode)** ✅ Протестировано
-1. Промпт: «Сохрани как filename.ext»
-2. GLM Agent: создаёт файл → `button[title="Download file"]` (скрытая, `hidden group-hover/item:flex`)
-3. Показать: `parent.querySelector('.hidden')?.classList.replace('hidden', 'flex')`
-4. Playwright: `waitForEvent('download')` → `click()` → `download.saveAs(path)`
-
-**Ограничения:** нет файлового сервера/URL, sandbox, нет git, нет HTTP, таймаут ~5 мин
+**Условие Download кнопки:** нужен Agent Mode + `code_execution` (файл в sandbox)
+**Ограничения:** нет файлового сервера/URL, sandbox, нет git, нет HTTP
 
 ---
 
