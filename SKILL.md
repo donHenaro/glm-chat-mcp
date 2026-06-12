@@ -77,11 +77,8 @@ used-by:
 **Фаза 1 не прошла за 15 сек?** Проверить: ошибка в DOM? редирект на /login? retry 1 раз.
 
 ### 7. Прочитать ответ и записать лог
-response.js
-```
-response.js
-```
-Вернёт: `{ done: true/false, textLen, text, spinner }`
+`read_file('scripts/response.js')` → `browser_evaluate(readResponse('glm'))`
+Вернёт: `{ done: true/false, textLen, text, provider }`
 
 ---
 
@@ -486,6 +483,59 @@ glm-chat-mcp/                     ← https://github.com/donHenaro/glm-chat-mcp
 2. `browser_evaluate(<function_body>)` — выполнить нужную функцию в контексте страницы
 
 ### Репозиторий: https://github.com/donHenaro/glm-chat-mcp.git
+
+---
+
+## 📝 Примеры промптов (по рекомендациям GLM)
+
+### Код-ревью (Java/Spring Boot)
+```
+[Код-ревью] Spring Boot сервис, проблема: N+1 в методе getOrders().
+Вот сигнатура + проблемный метод:
+```java
+public List<OrderDTO> getOrders(Long customerId) {
+  List<Order> orders = orderRepo.findByCustomerId(customerId);
+  for (Order o : orders) { o.getItems().size(); } // lazy load
+  return orders.stream().map(this::toDTO).toList();
+}
+```
+Вопрос: как исправить N+1? Только проблемный метод, не весь файл.
+```
+
+### Анализ логов
+```
+[Анализ логов] Приложение падает с OOM каждые ~2 часа.
+Вот сэмпл из 10 строк (из 500K) с ERROR + первые 5 строк stack trace:
+```
+2025-01-15 14:23:01 ERROR [pool-3] OutOfMemoryError: Java heap space
+  at java.util.Arrays.copyOf(Arrays.java:3210)
+  at com.example.service.CacheManager.put(CacheManager.java:45)
+  ...
+```
+Гипотеза: memory leak в CacheManager. Подтверди или опровергни.
+```
+
+### Анализ PDF/DOCX
+```
+[PDF-анализ] Загружен файл с архитектурой системы (48 стр).
+Дай: 1) Краткое содержание (5 предложений) 2) Ключевые компоненты 3) Потенциальные проблемы
+Формат: markdown с заголовками.
+```
+
+### Мульти-консультация
+```
+[Всем] Какой подход лучше для rate limiting в Spring Boot:
+A) Bucket4j B) Resilience4j C) Spring Cloud Gateway filters?
+Ответ: 1) Твой выбор 2) Обоснование 3) Уровень уверенности (0-100%)
+```
+
+### Генерация файла через Agent Mode
+```
+Создай JSON-файл config.json с настройками Spring Boot приложения:
+server.port=8080, spring.datasource.url=postgresql://localhost/mydb,
+spring.jpa.hibernate.ddl-auto=validate.
+Покажи файл для скачивания.
+```
 
 ---
 
