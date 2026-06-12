@@ -146,14 +146,19 @@ return { thought: thought.slice(0,200), tools: toolCalls.length, textLen: mainTe
 ```
 
 ### Сценарий 1: Анализ файлов
-1. `browser_click` "+" → Upload → `browser_upload_file` путь
-   ⚠️ `.java/.js/.py` → **переименовать в `.txt`** (GLM фильтрует расширения)
+1. **Загрузить файл:** `browser_evaluate` → `input[type=file].setInputFiles(путь)`
+   - GLM показывает preview: «filename.ext · X.X MB»
+   - ⚠️ `.java/.js/.py` → **переименовать в `.txt`** (GLM фильтрует расширения)
+   - ✅ PDF, DOCX, XLSX, PPTX, TXT, MD, изображения — поддерживаются
 2. textarea: «Проанализируй прикреплённый файл. Найди: 1) Баги 2) Уязвимости 3) Нарушения паттернов»
-3. waitForCompletion(480с, phase='agent') — Agent может вызывать code_execution
+3. waitForCompletion(480с, phase='agent') — Agent запускает tool calls для извлечения текста
 4. Прочитать: `.markdown-prose` последнего сообщения
 
-### Сценарий 2: Генерация и извлечение кода
-1. textarea: «Создай [описание]. Покажи весь код прямо в чате.» → Enter
+**Протестировано:** PDF 4.8MB (86 стр) → GLM Agent (8 tool calls, ~30 сек) → полный анализ 3460 симв
+**Загрузка файлов:** `input[type=file].setInputFiles(absPath)` — GLM рендерит preview «filename.ext · X.X MB»
+
+### Сценарий 2: Генерация и извлечение кода / контента
+1. textarea: «Создай [описание]. Покажи весь код/результат прямо в чате.» → Enter
 2. waitForCompletion(300с)
 3. **extractCodeBlocks():**
 ```javascript
@@ -163,7 +168,10 @@ return Array.from(blocks).map(b => ({
   code: b.textContent || ''
 }));
 ```
-4. VeAI: для каждого блока → `write_file(target_path, code)`
+4. **Или полный текст:** `.markdown-prose[last]` → `innerText` (для markdown-презентаций, отчётов)
+5. VeAI: для каждого блока → `write_file(target_path, code)`
+
+**Протестировано:** PDF анализ → follow-up «создай презентацию» → 5 слайдов markdown (мультитурн!)
 
 ### Сценарий 3: Редактирование репозитория
 1. textarea: «В репозитории [путь]: 1) Найди баги 2) Предложи исправления 3) Покажи diff. Показывай ход работы.»
