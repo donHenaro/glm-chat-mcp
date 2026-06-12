@@ -75,8 +75,9 @@ used-by:
 
 ### 7. Прочитать ответ и записать лог
 ```javascript
-const msgs = document.querySelectorAll('.chat-assistant .markdown-prose');
-const text = msgs[msgs.length - 1]?.innerText || '';
+// ⚠️ .chat-assistant — Svelte класс, может измениться. Используем .markdown-prose напрямую
+const prose = document.querySelectorAll('.markdown-prose');
+const text = prose[prose.length - 1]?.innerText || '';
 ```
 
 ---
@@ -96,9 +97,9 @@ const text = msgs[msgs.length - 1]?.innerText || '';
 
 | Сигнал | GLM | Qwen | DeepSeek |
 |--------|-----|------|----------|
-| Генерация идёт | `button[aria-label*="Stop"]` | `button:has-text("Stop")` | `button:has-text("Stop")` |
+| Генерация идёт | Stop видна через snapshot | `button:has-text("Stop")` | `button:has-text("Stop")` |
 | Thinking | `[class*="thinking"]` | `"Generating..."` | `[class*="thinking"]` |
-| Готово | `button:has-text("Copy")` | `button:has-text("Copy")` | `button:has-text("Copy")` |
+| Готово | `button[class*="copy"]` стабильно 3 сек | `button:has-text("Copy")` | `button:has-text("Copy")` |
 | Ошибка | красный toast/alert | текст в сообщении | красный баннер |
 
 ### Прогресс-модель (5 фаз ожидания)
@@ -138,11 +139,12 @@ const text = msgs[msgs.length - 1]?.innerText || '';
 ### Прогресс-мониторинг (читать ход Agent Mode)
 ```javascript
 // browser_evaluate — понимать что происходит
-const thought = document.querySelector('.thinking-chain-container')?.innerText || '';
-const toolCalls = document.querySelectorAll('.tool-call-item');
-const mainText = document.querySelector('.chat-assistant:last-of-type .markdown-prose')?.innerText || '';
-const hasButtons = !!document.querySelector('.chat-assistant:last-of-type [class*="copy"], .chat-assistant:last-of-type [class*="regenerate"]');
-return { thought: thought.slice(0,200), tools: toolCalls.length, textLen: mainText.length, done: hasButtons };
+const thought = document.querySelector('[class*="thinking-chain"]')?.innerText || '';
+const toolCalls = document.querySelectorAll('[class*="tool-call"]');
+const prose = document.querySelectorAll('.markdown-prose');
+const mainText = prose[prose.length - 1]?.innerText || '';
+const hasCopy = !!document.querySelector('button[class*="copy"]');
+return { thought: thought.slice(0,200), tools: toolCalls.length, textLen: mainText.length, done: hasCopy };
 ```
 
 ### Сценарий 1: Анализ файлов
