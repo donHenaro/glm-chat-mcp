@@ -194,8 +194,18 @@ return Array.from(blocks).map(b => ({
 4. `write_file('telegram_bot.py', code)` → `run_command python telegram_bot.py`
 
 ### Сценарий 6: Получение файлов от GLM
-- GLM может рендерить Download кнопку (PolarFS) → `browser_click` Download
-- **Надёжнее:** добавить в промпт «Покажи весь код прямо в чате, не создавай файл»
+GLM Agent Mode генерирует файлы (sandbox → PolarFS). Два способа:
+
+**Метод A: Download кнопка (Agent Mode)** ✅ Протестировано
+1. Промпт: «Создай файл X с данными Y. Сохрани как filename.ext»
+2. GLM Agent: создаёт файл → рендерит `button[title="Download file"]` (скрытая!)
+3. Показать кнопку: `parent.querySelector('.hidden')?.classList.replace('hidden', 'flex')`
+4. Playwright: `waitForEvent('download')` → `click()` → `download.saveAs(path)`
+5. **Протестировано:** Agent → weather.csv → Download → `downloads/weather.csv` ✅
+
+**Метод B: extractCodeBlocks() (Chat Mode)** — надёжный fallback
+- Промпт: «Покажи весь код прямо в чате, не создавай файл»
+- `pre code` → `write_file()` — работает всегда, не зависит от Agent Mode
 
 **Ограничения:** sandbox (нет ФС), нет git, нет прямого HTTP, таймаут ~5 мин, beforeunload
 
