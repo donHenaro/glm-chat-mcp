@@ -509,6 +509,59 @@ Caused by: java.net.ConnectException: Connection refused
 | Copy/Regenerate мигнули и исчезли | Agent Mode — продолжить ожидание |
 | beforeunload диалог | Закрыть вкладку, открыть заново |
 | Редирект на /login | Предупредить пользователя — нужна авторизация |
+| **Селектор не найден** (DOM обновился) | Startup Health-Check: при инициализации проверить все селекторы → ошибка "Selector outdated for X" |
+| **Anti-Bot / тихий бан** (403, пустой ответ) | Использовать playwright-extra stealth; human-like typing (50-150мс задержки) |
+| **Context Overflow** (UI: "Сообщение слишком длинное") | Извлечь историю → суммаризировать → новый чат с саммари |
+| **Один провайдер упал** (мульти-консультация) | Graceful degradation: продолжить с оставшимися, логировать ошибку |
+| **State Drift** (пользователь кликнул в браузере) | Перед отправкой: верифицировать textarea пустой → если нет → reload |
+
+---
+
+## 🛡️ Production Readiness (по результатам мульти-консультации)
+
+### Startup Health-Check
+При инициализации скилла — проверить все селекторы:
+```javascript
+// browser_evaluate — health check
+const checks = {
+  glm: !!document.querySelector('.markdown-prose'),
+  qwen: !!document.querySelector('[class*="message-content"]'),
+  deepseek: !!document.querySelector('.ds-markdown')
+};
+// Если селектор не найден → "Selector outdated for Provider X"
+```
+
+### Anti-Bot защита
+- Использовать `playwright-extra` с плагином `stealth`
+- **НЕ** использовать `page.fill()` — использовать human-like typing:
+```javascript
+// Кастомная функция ввода с рандомными задержками
+async function humanType(input, text) {
+  for (const char of text) {
+    await input.type(char, { delay: 50 + Math.random() * 100 });
+  }
+}
+```
+- Рандомные паузы между запросами (2-5 сек)
+
+### Multi-tier Locators (fallback-цепочка)
+Для каждого элемента — массив локаторов по приоритету:
+```
+GLM response: ['.markdown-prose', '[class*="prose"]', '[role="article"]']
+Qwen response: ['[class*="message-content"]', '.markdown-body', '[role="article"]']
+DeepSeek response: ['.ds-markdown', '[class*="markdown"]', '[role="article"]']
+```
+
+### Resource Management
+- 3 персистентных контекста (по одному на провайдера) — НЕ создавать новый на запрос
+- `browserContext.close()` при остановке MCP-сервера
+- Мониторинг RAM: если вкладка >500MB → перезагрузить
+
+### Context Overflow Recovery
+1. Парсить UI-ошибку: "Сообщение слишком длинное" / "History exceeded"
+2. Извлечь всю историю чата (все `.markdown-prose`)
+3. Суммаризировать локально или через дешёвый API
+4. Создать новый чат → отправить саммари как системный промпт
 
 ---
 
