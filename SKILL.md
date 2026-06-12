@@ -123,25 +123,71 @@ const text = msgs[msgs.length - 1]?.innerText || '';
 
 ---
 
-## 🤖 GLM Agent Mode
-
-Agent Mode — автономный агент с инструментами. Составляет план и пошагово выполняет.
+## 🤖 GLM Agent Mode — Операционные инструкции
 
 **Инструменты:** web_search, code_execution, browser_automation, file_operations, mcp_servers
+**Включение:** `.toolbar-icon.agent` → click (если нет — уже включён)
+⚠️ **beforeunload:** browser_automation может заблокировать Playwright. Решение: Copy/Regenerate detection.
 
-**Сценарии:** исследование документации → анализ файлов → выполнение кода → генерация файлов → автоматизированные цепочки
-
-⚠️ **beforeunload:** Agent Mode browser_automation может вызвать диалог блокировки Playwright.
-Решение: использовать Copy/Regenerate detection (не патчим fetch).
-
-**Рекомендации:**
-| Ситуация | Режим | Причина |
+| Ситуация | Режим | Таймаут |
 |----------|-------|---------|
-| Простой вопрос / код-ревью | Chat Mode | 5-15 сек |
-| Веб-поиск | Agent Mode | web_search |
-| Анализ файла | Agent Mode | file_operations + Vision |
-| Выполнить код | Agent Mode | code_execution |
-| Многошаговая задача | Agent Mode | agent loop с tools |
+| Простой вопрос / код-ревью | Chat Mode | 60с |
+| Deep Think | Chat Mode + thinking | 120с |
+| Всё что требует действий | Agent Mode | 300-480с |
+
+### Прогресс-мониторинг (читать ход Agent Mode)
+```javascript
+// browser_evaluate — понимать что происходит
+const thought = document.querySelector('.thinking-chain-container')?.innerText || '';
+const toolCalls = document.querySelectorAll('.tool-call-item');
+const mainText = document.querySelector('.chat-assistant:last-of-type .markdown-prose')?.innerText || '';
+const hasButtons = !!document.querySelector('.chat-assistant:last-of-type [class*="copy"], .chat-assistant:last-of-type [class*="regenerate"]');
+return { thought: thought.slice(0,200), tools: toolCalls.length, textLen: mainText.length, done: hasButtons };
+```
+
+### Сценарий 1: Анализ файлов
+1. `browser_click` "+" → Upload → `browser_upload_file` путь
+   ⚠️ `.java/.js/.py` → **переименовать в `.txt`** (GLM фильтрует расширения)
+2. textarea: «Проанализируй прикреплённый файл. Найди: 1) Баги 2) Уязвимости 3) Нарушения паттернов»
+3. waitForCompletion(480с, phase='agent') — Agent может вызывать code_execution
+4. Прочитать: `.markdown-prose` последнего сообщения
+
+### Сценарий 2: Генерация и извлечение кода
+1. textarea: «Создай [описание]. Покажи весь код прямо в чате.» → Enter
+2. waitForCompletion(300с)
+3. **extractCodeBlocks():**
+```javascript
+const blocks = document.querySelectorAll('pre code, [class*="code-block"] pre');
+return Array.from(blocks).map(b => ({
+  language: b.className.match(/language-(\w+)/)?.[1] || 'unknown',
+  code: b.textContent || ''
+}));
+```
+4. VeAI: для каждого блока → `write_file(target_path, code)`
+
+### Сценарий 3: Редактирование репозитория
+1. textarea: «В репозитории [путь]: 1) Найди баги 2) Предложи исправления 3) Покажи diff. Показывай ход работы.»
+2. waitForCompletion(480с) — Agent: plan → read → edit → verify (5-10 tool calls)
+3. Между tool calls кнопки мигают — **НЕ считать готовым**, ждать стабильных 3 сек
+4. extractCodeBlocks() → VeAI: `edit_file()` с полученными патчами
+5. Если неполный: follow-up «Продолжи с последнего шага»
+
+### Сценарий 4: Web-исследование
+1. `.toolbar-icon.search` → click (или Agent+Search)
+2. textarea: «Найди информацию о [тема] в интернете»
+3. waitForCompletion(480с) — Agent: search → read pages → synthesize
+4. Прочитать `.markdown-prose` — URL источников встроены в текст
+
+### Сценарий 5: Telegram / внешние интеграции
+⚠️ GLM **не может** отправлять в Telegram напрямую (sandbox, нет HTTP)
+1. VeAI → GLM: «Напиши Python-скрипт для отправки сообщения в Telegram через Bot API. Используй плейсхолдеры BOT_TOKEN и CHAT_ID»
+2. extractCodeBlocks() → получить код
+3. **НА СТОРОНЕ VeAI:** подставить реальный токен (НИКОГДА не упоминать токен в промпте GLM!)
+4. `write_file('telegram_bot.py', code)` → `run_command python telegram_bot.py`
+
+### Сценарий 6: Получение файлов от GLM
+- GLM может рендерить Download кнопку (PolarFS) → `browser_click` Download
+- **Надёжнее:** добавить в промпт «Покажи весь код прямо в чате, не создавай файл»
 
 **Ограничения:** sandbox (нет ФС), нет git, нет прямого HTTP, таймаут ~5 мин, beforeunload
 
