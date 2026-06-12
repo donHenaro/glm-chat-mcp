@@ -165,18 +165,49 @@ window.__sseChunks = [];
 // Затем: textarea.fill(prompt) + textarea.press('Enter') через Playwright
 ```
 
-**Шаг 3:** Прочитать SSE-ответ:
+**Шаг 3 (рекомендуемый): Bubble-reading** — чтение из DOM пузыря:
 ```javascript
-// browser_evaluate — дождаться нужного количества chunks
-const chunks = window.__sseChunks || [];
-// GLM SSE формат (НЕ OpenAI!):
-// data: {"type":"chat:completion","data":{"phase":"other","usage":{...}}}
-// data: {"type":"chat:completion","data":{"delta_content":"Ответ","phase":"answer"}}
-// data: {"type":"chat:completion","data":{"phase":"done","done":true}}
+// Универсальный метод для ВСЕХ провайдеров
+// Пузырь — это контейнер сообщения ассистента, который постепенно заполняется текстом
+// Отслеживаем .markdown-prose или аналогичный контейнер
+
+// GLM: .chat-assistant .markdown-prose
+// Qwen: .chat-messages (последний блок ассистента)
+// DeepSeek: #root (последний блок ответа)
+
+const result = await (async () => {
+  let stableCount = 0;
+  let lastLen = -1;
+  
+  for (let i = 0; i < 30; i++) { // макс 150 сек (30 × 5с)
+    await new Promise(r => setTimeout(r, 5000));
+    
+    // Находим последний пузырь ответа
+    const msgs = document.querySelectorAll('.chat-assistant .markdown-prose');
+    const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : null;
+    const text = lastMsg?.innerText || '';
+    
+    if (text.length === lastLen && text.length > 0) {
+      stableCount++;
+      if (stableCount >= 3) return { text, done: true }; // 15 сек без изменений = готово
+    } else {
+      stableCount = 0;
+    }
+    lastLen = text.length;
+  }
+  return { text, done: false }; // таймаут
+})();
 ```
 
-**Парсинг GLM SSE:**
+**Преимущества bubble-reading:**
+- ⚡ Не нужен SSE-перехват — не патчим fetch (нет риска потери патча при навигации)
+- 🎯 Работает для ВСЕХ провайдеров (GLM, Qwen, DeepSeek)
+- 🛡️ Не ломается при Agent Mode (Agent Mode может вызывать beforeunload — SSE-патч теряется)
+- 📊 Видим финальный отрендеренный текст (markdown → HTML → innerText)
+
+**Шаг 3 (альтернативный): SSE-intercept** — для GLM только, когда нужен streaming:
 ```javascript
+// Парсинг GLM SSE (собственный формат, НЕ OpenAI):
 const chunks = window.__sseChunks || [];
 const fullText = chunks
   .flatMap(c => c.split('\n'))
@@ -545,63 +576,79 @@ if (fileInput) {
 
 ## 🤖 GLM Agent Mode — расширенные возможности
 
-GLM Agent Mode (`flags:["general_agent"]`) — это **автономный агент** с доступом к инструментам.
-В отличие от обычного чата, Agent Mode может выполнять действия, а не только генерировать текст.
+GLM Agent Mode — **автономный агент с доступом к инструментам**.
+В отличие от обычного чата (Chat Mode), Agent Mode:
+- **Chat Mode:** быстро (5-15 сек), один шаг, генерация текста
+- **Agent Mode:** медленно (1-5 мин), многошаговый, выполнение действий с инструментами
+
+Agent Mode **составляет план** и **пошагово выполняет** — ответ формируется качественно, но очень долго.
+Если нужен простой и быстрый ответ — используй **Chat Mode**.
 
 ### Встроенные инструменты Agent Mode:
 
-| Инструмент | Описание | Подтверждено |
-|------------|----------|:------------:|
-| **web_search** | Поиск в интернете, анализ источников | ✅ |
-| **code_execution** | Выполнение Python кода в sandbox | ✅ |
-| **browser_automation** | Управление браузером, навигация по сайтам | ✅ |
-| **file_operations** | Чтение/создание файлов в sandbox | ✅ |
-| **mcp_servers** | Подключение к внешним MCP-серверам | ⚠️ |
+| Инструмент | Описание | Примеры |
+|------------|----------|:-------:|
+| **web_search** | Поиск в интернете, чтение веб-страниц | Документация, GitHub issues, StackOverflow |
+| **code_execution** | Выполнение Python кода в sandbox | Валидация алгоритмов, httpx-запросы |
+| **browser_automation** | Управление браузером, навигация | Открытие URL, чтение страниц |
+| **file_operations** | Чтение/создание файлов в sandbox | Обработка файлов, генерация результатов |
+| **mcp_servers** | Подключение к внешним MCP-серверам | Расширение возможностей |
 
 ### Активация Agent Mode:
 - **UI:** Нажать кнопку "Agent" в GLM чате
-- **SSE-перехват:** features автоматически включат `flags:["general_agent"]` + `reasoning_effort:"max"`
+- **Параметры API:** `flags:["general_agent"]` + `reasoning_effort:"max"`
 
 ### Сценарии использования в скилле:
 
-#### 1. Анализ файлов разных форматов
-```
-Пользователь: "Проанализируй этот PDF/DOCX/XLSX файл"
-Агент VeAI → GLM Agent Mode: загрузить файл + проанализировать
-```
-- GLM Agent может обработать загруженный файл через Vision API
-- Поддержка: .pdf, .docx, .xlsx, .pptx, .txt, .md, .py, изображения
-- Результат: структурированный анализ содержимого
-
-#### 2. Исследование документации
+#### 1. 🔍 Исследование и документация
 ```
 Пользователь: "Найди актуальную документацию по Spring Boot 3.5"
-Агент VeAI → GLM Agent Mode: web_search → анализ найденных страниц
+VeAI → GLM Agent Mode: web_search → browser_automation → чтение страниц → ответ
 ```
-- GLM Agent ищет в интернете, читает страницы, извлекает релевантную информацию
-- Возвращает структурированный ответ с источниками
+GLM Agent ищет, читает найденные страницы, извлекает релевантную информацию.
+Возвращает ответ с источниками и ссылками.
 
-#### 3. Валидация кода
+#### 2. 📄 Анализ файлов
 ```
-Пользователь: "Проверь этот код на ошибки"
-Агент VeAI → GLM Agent Mode: code_execution → запуск → анализ результатов
+Пользователь: "Проанализируй этот PDF/DOCX/XLSX файл"
+VeAI → загрузить файл через UI → GLM Agent Mode: file_operations + Vision → анализ
 ```
-- GLM Agent может выполнить Python код для проверки гипотез
+- Форматы: .pdf, .docx, .xlsx, .pptx, .txt, .md, .py, изображения
+- Может извлечь данные, выполнить вычисления (code_execution), вернуть отчёт
+
+#### 3. 🧪 Выполнение и валидация кода
+```
+Пользователь: "Проверь этот алгоритм на больших данных"
+VeAI → GLM Agent Mode: code_execution → запуск → анализ результатов
+```
+- Python sandbox с httpx, pandas, numpy (по возможности)
 - Полезно для валидации алгоритмов, вычислений, преобразований
 
-#### 4. Генерация и скачивание файлов
+#### 4. 📥 Генерация файлов
 ```
-Пользователь: "Сгенерируй SQL-схему для этой модели"
-Агент VeAI → GLM Agent Mode: file_operations → создать файл → скачать
+Пользователь: "Сгенерируй SQL-схему"
+VeAI → GLM Agent Mode: file_operations → создать файл → ссылка на скачивание
 ```
-- GLM Agent может создавать файлы в sandbox и предоставлять ссылку для скачивания
 
-#### 5. Автоматизированные рабочие процессы
+#### 5. ⛓️ Автоматизированные цепочки
 ```
-Пользователь: "Найди баг в этом коде → исправь → создай патч"
-Агент VeAI → GLM Agent Mode: multi-step agent loop
-  1. web_search: найти причину бага
-  2. code_execution: воспроизвести баг
+Пользователь: "Найди баг → воспроизведи → предложи исправление"
+VeAI → GLM Agent Mode: multi-step agent loop
+  1. web_search → найти причину
+  2. code_execution → воспроизвести
+  3. file_operations → создать патч
+  4. Вернуть результат
+```
+
+### ⚠️ Критическое: Agent Mode и beforeunload
+
+Agent Mode может вызывать `browser_automation` — навигацию на другие сайты.
+Это вызывает **beforeunload** диалог, который **блокирует Playwright**.
+
+**Решения:**
+1. ✅ Использовать **bubble-reading** вместо SSE-intercept (не патчим fetch)
+2. ✅ Проверять URL перед чтением ответа — если GLM ушёл, вернуться назад
+3. ❌ Не использовать SSE-intercept при Agent Mode — патч теряется при навигации
   3. file_operations: создать исправленный файл
   4. Вернуть патч пользователю
 ```
@@ -610,7 +657,7 @@ GLM Agent Mode (`flags:["general_agent"]`) — это **автономный а�
 
 | Ситуация | Режим | Причина |
 |----------|-------|--------|
-| Простой вопрос | Обычный | Быстрее, дешевле |
+| Простой вопрос / код-ревью | Chat Mode | Быстро (5-15 сек) |
 | Нужен веб-поиск | Agent Mode | web_search доступен только в Agent |
 | Анализ файла | Agent Mode | Нужны file_operations + Vision |
 | Выполнить код | Agent Mode | code_execution только в Agent |
@@ -618,20 +665,20 @@ GLM Agent Mode (`flags:["general_agent"]`) — это **автономный а�
 | Генерация файла | Agent Mode | file_operations для создания |
 
 ### Ограничения Agent Mode:
-- ⏱️ **Медленнее** — каждый tool call требует отдельного API-запроса
-- 💰 **Дороже** — intermediate reasoning + tool calls = больше токенов
-- 🔒 **Sandbox** — code_execution изолирован, нет доступа к файловой системе пользователя
-- 🌐 **Нет прямого сетевого доступа** — только через web_search, нельзя делать HTTP-запросы к API
-- 📦 **Нет git** — нельзя клонировать репозитории или создавать коммиты
-- ⏰ **Таймаут** — agent loop ограничен по времени (~5 минут)
+- ⏱️ **Медленный** — 1-5 минут (составляет план, пошагово выполняет)
+- 🔒 **Sandbox** — code_execution изолирован, нет доступа к ФС пользователя
+- 🌐 **Нет прямого HTTP** — только web_search и browser_automation
+- 📦 **Нет git** — нельзя клонировать репозитории, создавать коммиты
+- ⏰ **Таймаут** — agent loop ограничен (~5 минут)
+- 🔄 **beforeunload** — browser_automation может заблокировать Playwright
 
 ### Agent Mode и VeAI оркестрация:
 
-VeAI агент выступает **оркестратором** — он решает когда направить задачу в GLM Agent Mode:
+VeAI агент решает, когда направить задачу в GLM Agent Mode:
 ```
 VeAI (оркестратор)
-  ├→ GLM обычный режим — быстрые ответы, код-ревью, объяснения
-  ├→ GLM Agent Mode — веб-поиск, анализ файлов, выполнение кода
+  ├→ GLM Chat Mode — быстрые ответы, код-ревью (5-15 сек)
+  ├→ GLM Agent Mode — веб-поиск, анализ файлов, код (1-5 мин)
   ├→ Qwen — альтернативное мнение, китайская документация
   └→ DeepSeek — reasoning задачи, R1
 ```
