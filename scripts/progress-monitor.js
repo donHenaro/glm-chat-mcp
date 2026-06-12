@@ -1,44 +1,63 @@
 /**
- * Progress Monitor — чтение хода Agent Mode / Deep Think
+ * scripts/progress-monitor.js v13.1
+ * Мониторинг Agent Mode (thought + toolCalls + mainText + done + spinner)
+ *
+ * ИСПРАВЛЕНО: убрана зависимость от несуществующих селекторов
+ *
+ * Вызов: browser_evaluate(filename='progress-monitor.js')
  */
+(() => {
+  const SELECTORS = {
+    GLM:      { text: '.markdown-prose',        thought: '[class*="thinking"]',  spinner: '[class*="spinner"]' },
+    Qwen:     { text: '[class*="message-content"]', thought: '[class*="thinking"]',  spinner: '[class*="loading"]' },
+    DeepSeek: { text: '.ds-markdown',            thought: '[class*="think"]',     spinner: '[class*="loading"]' }
+  };
 
-function monitorProgress(provider) {
-  const thought = document.querySelector('[class*="thinking"]')?.innerText || '';
-  const toolCalls = document.querySelectorAll('[class*="tool-call"]');
+  const host = location.hostname;
+  const key = host.includes('z.ai') ? 'GLM' : host.includes('qwen') ? 'Qwen' : 'DeepSeek';
+  const sel = SELECTORS[key];
 
-  // Чтение основного текста ответа
-  let mainText = '';
-  let textLen = 0;
-  try {
-    const elements = document.querySelectorAll('.markdown-prose');
-    const last = elements[elements.length - 1];
-    mainText = last?.innerText || '';
-    textLen = mainText.length;
-  } catch (e) { /* fallback */ }
+  // Последний текстовый элемент
+  const textEls = document.querySelectorAll(sel.text);
+  const lastText = textEls[textEls.length - 1];
+  const mainText = lastText?.innerText || '';
 
-  // Проверка готовности (GLM: SVG buttons, другие: Copy text)
-  let done = false;
-  if (provider === 'glm') {
-    const prose = document.querySelectorAll('.markdown-prose');
-    const last = prose[prose.length - 1];
-    const parent = last?.closest('[class*="message"]') || last?.parentElement?.parentElement;
-    const btns = parent ? parent.querySelectorAll('button') : [];
-    const actionBtns = Array.from(btns).filter(b => b.className.includes('visible') && b.querySelector('svg'));
-    done = actionBtns.length >= 2;
-  } else {
-    // Fallback для не-GLM: искать кнопку с текстом Copy
-    const copyBtns = Array.from(document.querySelectorAll('button')).filter(b => (b.textContent || '').trim() === 'Copy');
-    done = copyBtns.length > 0;
-  }
+  // Thought (рассуждения)
+  const thoughtEls = document.querySelectorAll(sel.thought);
+  const lastThought = thoughtEls[thoughtEls.length - 1];
+  const thoughtText = lastThought?.innerText || '';
 
-  const spinner = !!document.querySelector('[class*="spinner"]');
+  // Tool calls — универсальный поиск
+  const toolCallEls = document.querySelectorAll('[class*="tool"], [class*="function-call"], [class*="code-exec"]');
+  const toolCalls = Array.from(toolCallEls).map(el => el.textContent?.slice(0, 100)).filter(Boolean);
+
+  // Spinner — генерация ещё идёт
+  const spinner = document.querySelector(sel.spinner) !== null;
+
+  // Кнопки действий (Copy/Regenerate/Stop)
+  const lastBubble = lastText?.closest('[class*="message"]') || lastText?.parentElement?.parentElement;
+  const actionBtns = lastBubble
+    ? Array.from(lastBubble.querySelectorAll('button')).filter(b => b.querySelector('svg')).length
+    : 0;
+
+  // Done = spinner нет + есть текст + есть кнопки
+  const done = !spinner && mainText.length > 0 && actionBtns >= 2;
 
   return {
-    thought: thought.slice(0, 500),
-    tools: toolCalls.length,
-    textLen,
-    mainText: mainText.slice(0, 1000),
-    done,
+    provider: key,
+    mainTextLen: mainText.length,
+    mainText: mainText.slice(0, 500),
+    thoughtLen: thoughtText.length,
+    thought: thoughtText.slice(0, 300),
+    toolCalls: toolCalls.slice(0, 5),
+    toolCallCount: toolCallEls.length,
     spinner,
+    actionBtns,
+    done,
+    // Timing hint
+    hint: done ? 'Response complete — read full text' :
+          spinner ? 'Still generating — wait and re-check' :
+          mainText.length > 0 ? 'Text appeared but no action buttons yet' :
+          'No response yet — wait'
   };
-}
+})();

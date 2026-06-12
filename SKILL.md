@@ -77,9 +77,9 @@ used-by:
 **Фаза 1 не прошла за 15 сек?** Проверить: ошибка в DOM? редирект на /login? retry 1 раз.
 
 ### 7. Прочитать ответ и записать лог
-Выполнить `scripts/detect-response.js` через `browser_evaluate`:
+response.js
 ```
-read_file('scripts/detect-response.js') → browser_evaluate(isGLMResponseDone)
+response.js
 ```
 Вернёт: `{ done: true/false, textLen, text, spinner }`
 
@@ -110,7 +110,7 @@ read_file('scripts/detect-response.js') → browser_evaluate(isGLMResponseDone)
 | Ошибка | красный toast/alert | текст в сообщении | красный баннер |
 
 **GLM детектор готовности:**
-→ `scripts/detect-response.js` → `isGLMResponseDone()`
+response.js
 → Fallback-цепочка: `.markdown-prose` → `[class*="prose"]` → `[data-message-role="assistant"]`
 
 ### Прогресс-модель (5 фаз ожидания)
@@ -166,7 +166,7 @@ read_file('scripts/detect-response.js') → browser_evaluate(isGLMResponseDone)
 ### Сценарий 2: Генерация и извлечение кода / контента
 1. textarea: «Создай [описание]. Покажи весь код/результат прямо в чате.» → Enter
 2. waitForCompletion(300с)
-3. **Прочитать ответ** — через `scripts/extract-text.js` → `extractLastResponse('glm')`
+response.js
 4. VeAI: `write_file(target_path, result.text)` — сохранить текст как файл
 
 **Протестировано:** PDF → follow-up «создай презентацию» → 5 слайдов markdown (мультитурн!)
@@ -238,7 +238,7 @@ read_file('scripts/detect-response.js') → browser_evaluate(isGLMResponseDone)
 
 **Шаг 4. Собрать ответы**
 → `scripts/multi-provider.js` → `collectResponses(providers)`
-Или: `scripts/detect-response.js` → `readResponse(provider)` для каждого
+response.js
 
 **Шаг 5. Критический анализ VeAI**
 VeAI — **оркестратор дискуссии**:
@@ -428,7 +428,7 @@ Caused by: java.net.ConnectException: Connection refused
 ## 🛡️ Production Readiness (по результатам мульти-консультации)
 
 ### Startup Health-Check
-→ `scripts/detect-response.js` → `healthCheck()`
+response.js
 Проверяет все селекторы при инициализации. Если селектор не найден → "Selector outdated for Provider X"
 
 ### Anti-Bot защита
@@ -437,7 +437,7 @@ Caused by: java.net.ConnectException: Connection refused
 - Рандомные паузы между запросами (2-5 сек)
 
 ### Multi-tier Locators (fallback-цепочка)
-Реализовано в `scripts/detect-response.js` → STRATEGIES:
+response.js
 - GLM: `.markdown-prose` → `[class*="prose"]` → `[data-message-role="assistant"]`
 - Qwen: `[class*="message-content"]` → `.markdown-body` → `[role="article"]`
 - DeepSeek: `.ds-markdown` → `[class*="markdown"]` → `[role="article"]`
@@ -473,11 +473,10 @@ glm-chat-mcp/                     ← https://github.com/donHenaro/glm-chat-mcp
 ├── _meta.json                    ← машиночитаемый конфиг (единый источник версий)
 ├── reference.md                  ← техническая справка API провайдеров
 ├── scripts/                      ← JS-скрипты для browser_evaluate
-│   ├── detect-response.js        ← Response Detection + fallback-цепочка
-│   ├── extract-text.js           ← чтение ответов + контекстный checkpoint
-│   ├── blob-download.js          ← перехват blob (текст + бинарные файлы)
-│   ├── progress-monitor.js       ← мониторинг Agent Mode
-│   └── multi-provider.js         ← параллельный опрос + форматирование
+│   ├── response.js               ← Response Detection + чтение + healthCheck
+│   ├── blob-download.js          ← Blob-перехват (текст + бинарные, try/finally)
+│   ├── progress-monitor.js       ← Мониторинг Agent Mode
+│   └── multi-provider.js         ← Параллельный опрос (rate limit 2с)
 ├── log/                          ← логи чатов
 └── test-results.md               ← результаты тестирования селекторов
 ```
@@ -492,13 +491,19 @@ glm-chat-mcp/                     ← https://github.com/donHenaro/glm-chat-mcp
 
 ## 📋 Changelog
 
-### v13.0.0 (current) — Scripts Edition
-**Breaking changes:**
-- Весь JS вынесен из SKILL.md в scripts/ (5 модулей)
+### v13.1.0 (current) — Bugfix + Merge
+**Fixed (по замечаниям GLM + Qwen + DeepSeek):**
+- `detect-response.js` + `extract-text.js` → объединены в `response.js`
+- `blob-download.js`: try/finally для URL.createObjectURL, ArrayBuffer→base64
+- `multi-provider.js`: убран document.querySelectorAll (ошибка контекста)
+- Fallback-цепочки селекторов логируются через console.warn
+- Версия: единый источник _meta.json.version
+
+### v13.0.0 — Scripts Edition
+- Весь JS вынесен из SKILL.md в scripts/ (5→4 модуля)
 - Fallback-цепочки селекторов (multi-tier locators)
 - Blob-download: readAsArrayBuffer для бинарных файлов
-- SKILL.md сокращён: ~498 → ~400 строк
-- Версия: единый источник _meta.json.version
+- Rate limiting 2с в multi-provider.js
 
 ### v12.0 — Strategy Edition
 - 5 паттернов промптов, контекстный checkpointing, оптимизация токенов

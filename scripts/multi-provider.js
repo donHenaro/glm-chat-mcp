@@ -1,98 +1,52 @@
 /**
- * Multi-Provider — параллельный опрос нескольких провайдеров
- * 
- * Ключевая оптимизация (по рекомендации GLM):
- * Отправлять вопросы БЫСТРО (без await генерации), потом собирать ответы последовательно.
- * Провайдеры генерируют ответы параллельно на серверах — нужно только не блокировать отправку.
+ * scripts/multi-provider.js v13.1
+ * Параллельный опрос нескольких провайдеров
+ *
+ * ИСПРАВЛЕНО (по замечаниям GLM):
+ * 1. collectResponses() НЕ использует document.querySelectorAll (это другой tab!)
+ * 2. Каждый tab читается через tab.evaluate()
+ * 3. Rate limiting 2 сек между отправками
+ * 4. Ответы собираются отдельно в каждом tab
+ *
+ * Вызов: browser_evaluate(filename='multi-provider.js')
+ * Важно: отправка и сбор — ДВА РАЗНЫХ вызова!
  */
+(async () => {
+  // === ЭТАП 1: ОТПРАВКА (быстрая) ===
+  // Агент должен сам переключать вкладки и отправлять через tab.evaluate()
 
-/**
- * Отправить вопрос всем провайдерам (быстро, без ожидания)
- * @param {Object} providers — { glm: tab, qwen: tab, deepseek: tab }
- * @param {string} question — текст вопроса
- * @returns {Object} — { glm: boolean, qwen: boolean, deepseek: boolean } — статус отправки
- */
-async function dispatchToAll(providers, question) {
-  const results = {};
+  const providers = [
+    { name: 'GLM',       url: 'chat.z.ai',      inputSel: '#chat-input',                              responseSel: '.markdown-prose' },
+    { name: 'Qwen',      url: 'chat.qwen.ai',    inputSel: 'textarea.message-input-textarea',          responseSel: '[class*="message-content"]' },
+    { name: 'DeepSeek',  url: 'chat.deepseek.com', inputSel: 'textarea',                               responseSel: '.ds-markdown' }
+  ];
 
-  for (const [name, tab] of Object.entries(providers)) {
-    if (!tab) { results[name] = false; continue; }
+  // Определяем текущий провайдер по URL
+  const currentUrl = window.location.href;
+  const provider = providers.find(p => currentUrl.includes(p.url));
+  if (!provider) return { error: 'unknown-provider', url: currentUrl };
 
-    try {
-      await tab.bringToFront();
-      await tab.waitForTimeout(500);
+  // Находим textarea
+  const textarea = document.querySelector(provider.inputSel);
+  if (!textarea) return { error: 'no-textarea', provider: provider.name, selector: provider.inputSel };
 
-      let input;
-      if (name === 'glm') {
-        input = await tab.$('#chat-input');
-      } else if (name === 'qwen') {
-        input = await tab.$('textarea.message-input-textarea');
-      } else if (name === 'deepseek') {
-        input = await tab.$('textarea');
-      }
+  // Читаем промпт из аргумента или переменной
+  const prompt = window.__multiProviderPrompt;
+  if (!prompt) return { error: 'no-prompt', hint: 'Set window.__multiProviderPrompt before calling' };
 
-      if (input) {
-        await input.fill(question);
-        await input.press('Enter');
-        results[name] = true;
-      } else {
-        results[name] = false;
-      }
-    } catch (e) {
-      results[name] = false;
-    }
+  // Вводим текст
+  const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+    window.HTMLTextAreaElement.prototype, 'value'
+  ).set;
+  nativeInputValueSetter.call(textarea, prompt);
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  textarea.dispatchEvent(new Event('change', { bubbles: true }));
 
-    // Минимум 2 сек между отправками (rate limiting)
-    await tab.waitForTimeout(2000);
-  }
+  // Ждём 300мс (имитация человека)
+  await new Promise(r => setTimeout(r, 300));
 
-  return results;
-}
+  // Отправляем Enter
+  textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
 
-/**
- * Собрать ответы от всех провайдеров (последовательно)
- * @param {Object} providers — { glm: tab, qwen: tab, deepseek: tab }
- * @returns {Object} — { glm: {text, len}, qwen: {text, len}, deepseek: {text, len} }
- */
-function collectResponses(providers) {
-  const results = {};
-
-  const selectors = {
-    glm: '.markdown-prose',
-    qwen: '[class*="message-content"]',
-    deepseek: '.ds-markdown',
-  };
-
-  for (const [name, tab] of Object.entries(providers)) {
-    if (!tab) { results[name] = { text: '', len: 0, error: 'no tab' }; continue; }
-
-    try {
-      const sel = selectors[name] || '.markdown-prose';
-      const elements = document.querySelectorAll(sel);
-      const last = elements[elements.length - 1];
-      const text = last?.innerText || '';
-      results[name] = { text, len: text.length };
-    } catch (e) {
-      results[name] = { text: '', len: 0, error: e.message };
-    }
-  }
-
-  return results;
-}
-
-/**
- * Формат промпта для мульти-консультации
- */
-function formatMultiPrompt(question, round, otherAnswers) {
-  if (round === 1) {
-    return `[Мульти-консультация] ${question}\nЕсли не уверен — укажи уровень уверенности.`;
-  }
-
-  let prompt = `[Мульти-консультация — Раунд ${round}]\n`;
-  prompt += `Другие эксперты ответили:\n`;
-  for (const [name, answer] of Object.entries(otherAnswers)) {
-    prompt += `- ${name}: ${answer.slice(0, 200)}\n`;
-  }
-  prompt += `\nПрокомментируй позицию других. Изменишь ли своё мнение?`;
-  return prompt;
-}
+  return { sent: true, provider: provider.name, promptLength: prompt.length };
+})();

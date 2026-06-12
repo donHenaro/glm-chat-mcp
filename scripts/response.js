@@ -1,7 +1,11 @@
 /**
- * Response Detection — проверка готовности ответа
- * Поддерживает fallback-цепочку селекторов (по рекомендации GLM)
+ * Response — единый модуль для detection + extraction + health-check
+ * Объединяет detect-response.js + extract-text.js (по рекомендации GLM)
+ * 
+ * Fallback-цепочки селекторов (по рекомендации GLM + Qwen)
+ * При срабатывании fallback — console.warn для наблюдаемости (по рекомендации Qwen)
  */
+
 const STRATEGIES = {
   glm: [
     () => document.querySelectorAll('.markdown-prose'),
@@ -20,12 +24,20 @@ const STRATEGIES = {
   ],
 };
 
+/**
+ * Общая функция — переиспользуется для detection и extraction
+ */
 function detectResponseElements(provider) {
   const strategies = STRATEGIES[provider] || STRATEGIES.glm;
-  for (const strategy of strategies) {
+  for (let i = 0; i < strategies.length; i++) {
     try {
-      const result = strategy();
-      if (result.length > 0) return result;
+      const result = strategies[i]();
+      if (result.length > 0) {
+        if (i > 0) {
+          console.warn('[glm-chat-mcp] Primary selector failed for ' + provider + ', used fallback #' + (i + 1));
+        }
+        return result;
+      }
     } catch (e) { /* next strategy */ }
   }
   throw new Error('All response detection strategies failed for ' + provider + ' — DOM changed?');
@@ -61,8 +73,27 @@ function readResponse(provider) {
   if (!last) return '';
 
   const text = last.innerText || '';
-  const clean = text.replace(/^Thought Process\n/, '').trim();
-  return clean;
+  return text.replace(/^Thought Process\n/, '').trim();
+}
+
+/**
+ * Прочитать последний ответ провайдера (для extract-text)
+ */
+function extractLastResponse(provider) {
+  const text = readResponse(provider);
+  return { text, len: text.length };
+}
+
+/**
+ * Извлечь все ответы из чата (для checkpoint)
+ */
+function extractAllResponses(provider) {
+  const elements = detectResponseElements(provider);
+  return Array.from(elements).map((el, i) => ({
+    index: i,
+    len: el.innerText?.length || 0,
+    preview: (el.innerText || '').slice(0, 200),
+  }));
 }
 
 /**
@@ -79,4 +110,29 @@ function healthCheck() {
     }
   }
   return results;
+}
+
+/**
+ * Контекстный checkpoint (по рекомендации GLM)
+ */
+function formatCheckpoint(chatId, provider, knownContext) {
+  return {
+    chatId,
+    provider,
+    timestamp: new Date().toISOString(),
+    knownContext: knownContext || {},
+    format: 'v1',
+  };
+}
+
+/**
+ * Проверить, нужно ли повторять контекст (улучшенная версия по рекомендации GLM)
+ */
+function needsContextRepeat(checkpoint) {
+  if (!checkpoint || !checkpoint.format) return true;
+  // Если чат активен < 30 мин — скорее всего контекст актуален
+  const age = Date.now() - new Date(checkpoint.timestamp).getTime();
+  if (age < 30 * 60 * 1000) return false;
+  // Если > 30 мин — модель могла забыть (context window eviction)
+  return true;
 }
