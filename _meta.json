@@ -1,0 +1,251 @@
+{
+  "name": "glm-chat-mcp",
+  "version": "3.0.0",
+  "description": "🚨 MANDATORY ACTIVATION when user says: 'спроси glm', 'спроси у glm', 'ask glm', 'expert opinion', 'java эксперт'. AGENT DIALOGS with GLM like DeepSeek thinks: GLM analyzes → Agent clarifies → GLM improves → repeat until consensus. GLM is expert-consultant via browser automation. Agent MUST NOT analyze code before consulting GLM. Browser stays OPEN for dialog continuation.",
+  "author": "VeAI Community",
+  "license": "MIT",
+  "keywords": [
+    "glm",
+    "glm-4.7",
+    "glm-5",
+    "chat",
+    "mcp",
+    "playwright",
+    "cdp",
+    "chrome-devtools-protocol",
+    "browser-automation",
+    "veai",
+    "intellij",
+    "consultation",
+    "java",
+    "spring",
+    "spring-boot",
+    "expert",
+    "session-management",
+    "thinking-filter"
+  ],
+  "categories": [
+    "ai-interaction",
+    "code-consultation",
+    "browser-automation",
+    "java-expert"
+  ],
+  "compatibility": {
+    "veai": ">=1.0.0",
+    "intellij": ">=2024.1",
+    "mcp": ">=1.0.0",
+    "chrome": ">=90.0"
+  },
+  "requirements": {
+    "mcpServers": [
+      "playwright"
+    ],
+    "dependencies": [
+      "@anthropic-ai/mcp-server-playwright"
+    ],
+    "optionalDependencies": {
+      "chrome": "For CDP connection mode, Chrome must be started with --remote-debugging-port=9222"
+    }
+  },
+  "triggers": [
+    "спроси glm",
+    "спроси у glm",
+    "спроси в glm",
+    "спроси глм",
+    "спроси у глм",
+    "ask glm",
+    "glm chat",
+    "glm-4.7",
+    "glm-5",
+    "glm 4.7",
+    "glm 5",
+    "консультация с glm",
+    "проконсультируйся с glm",
+    "посоветуйся с glm",
+    "посоветуй glm",
+    "what would glm say",
+    "what would glm think",
+    "what does glm think",
+    "glm knows",
+    "glm подскажет",
+    "glm знает",
+    "consult glm",
+    "что скажет glm",
+    "что думает glm",
+    "мнение glm",
+    "glm help",
+    "glm advice",
+    "мнение эксперта",
+    "экспертное мнение",
+    "expert opinion",
+    "java эксперт",
+    "java expert",
+    "spring эксперт",
+    "spring expert",
+    "spring консультация",
+    "spring consult"
+  ],
+  "workflow": {
+    "principle": "GLM acts as Java/Spring expert with HIGHEST PRIORITY opinion",
+    "browserPolicy": "NEVER close browser - keep open for dialog continuation",
+    "steps": [
+      "User sets a task",
+      "Agent gathers context (WITHOUT ANALYSIS!)",
+      "Format complete message: question + code + config + errors",
+      "Connect to browser (CDP connection recommended)",
+      "Start new chat for new topics OR continue existing chat",
+      "Type message in text field",
+      "CLICK SEND BUTTON!",
+      "Wait for final response (filter Thinking process)",
+      "Analyze response, ask clarifying questions if needed",
+      "Use result to solve user's task",
+      "BROWSER STAYS OPEN!"
+    ]
+  },
+  "responseDetection": {
+    "method": "polling-with-stability",
+    "criteria": {
+      "stabilityThreshold": 3,
+      "minResponseLength": 100,
+      "thinkingFilter": true,
+      "structureCheck": true
+    },
+    "thinkingMarkers": [
+      "Thinking...",
+      "Reasoning...",
+      "Let me think",
+      "Analyze the Request:",
+      "Thought Process",
+      "Self-Correction"
+    ],
+    "structureMarkers": [
+      "numbered lists",
+      "bold headers",
+      "Вердикт:",
+      "Рекомендации:",
+      "Выводы:",
+      "code blocks"
+    ]
+  },
+  "sessionManagement": {
+    "keepBrowserOpen": true,
+    "saveChatId": true,
+    "historyTracking": true,
+    "continuationSupport": true
+  },
+  "uiSelectors": {
+    "chatInput": [
+      "textarea",
+      "div[contenteditable=\"true\"]",
+      "[contenteditable=\"true\"]",
+      ".chat-input textarea",
+      "textbox"
+    ],
+    "sendButton": [
+      "button[type=\"submit\"]",
+      ".send-button",
+      "button[class*=\"send\"]",
+      "button:has(svg)"
+    ],
+    "newChatButton": [
+      "button:has(新对话)",
+      "button[aria-label*=\"新对话\"]",
+      ".new-chat-button"
+    ],
+    "responseArea": [
+      ".message-response:last-child",
+      ".assistant-message:last-child",
+      "[class*=\"assistant\"]:last-child"
+    ],
+    "thinkingIndicator": [
+      ".thinking-indicator",
+      "[class*=\"thinking\"]",
+      ".reasoning-block",
+      "[class*=\"reasoning\"]"
+    ]
+  },
+  "configuration": {
+    "browser": {
+      "type": "cdp-connect",
+      "cdpEndpoint": "http://localhost:9222",
+      "reuseSession": true,
+      "preserveLogin": true,
+      "keepOpen": true
+    },
+    "chatUrl": "https://chat.z.ai",
+    "timeouts": {
+      "contextGathering": 60000,
+      "pageLoad": 15000,
+      "responseWait": 180000,
+      "pollingInterval": 2000,
+      "stabilityThreshold": 3,
+      "minResponseLength": 100
+    }
+  },
+  "changelog": {
+    "1.5.0": [
+      "ПОЛНЫЙ ПЕРЕРАБОТКА процесса работы: Агент ведёт ДИАЛОГ с GLM",
+      "Аналог DeepSeek: GLM выдаёт анализ → Агент уточняет → GLM улучшает",
+      "Добавлен этап 'Агент ОБДУМЫВАЕТ вопрос' перед отправкой",
+      "Диалоговый цикл: Агент может уточнять, обсуждать альтернативы, запрашивать примеры",
+      "Цикл продолжается до достижения консенсуса и полного понимания",
+      "Этап 'Агент ПРИМЕНЯЕТ рекомендации' явно описан в процессе",
+      "Ключевое отличие: GLM不再是 просто генератор ответов, а эксперт-консультант"
+    ],
+    "0.5.0": [
+      "Добавлен раздел 'Практические шаги для агента' с конкретными вызовами инструментов",
+      "Добавлен раздел 'Распространенные ошибки агента' с решениями",
+      "Уточнены инструкции по retry для browser_navigate",
+      "Уточнено управление вкладками: запрет на использование browser_tabs для новых чатов",
+      "Улучшено описание поллинга ответа с акцентом на фильтрацию Thinking",
+      "Добавлены примеры псевдокода для вспомогательных функций"
+    ],
+    "0.4.1": [
+      "🚨 ENHANCED: Much stronger activation triggers and wording",
+      "Added 'ЭТО КОМАНДА, НЕ ПРОСЬБА' (THIS IS A COMMAND, NOT A REQUEST)",
+      "Added translit triggers: 'спроси глм', 'спроси у глм'",
+      "Added more Russian triggers: 'мнение glm', 'glm подскажет', 'glm знает', 'посоветуй glm'",
+      "Added more English triggers: 'what does glm think', 'spring expert'",
+      "Added section 'ЧТО ДЕЛАТЬ ЕСЛИ SKILL НЕ АКТИВИРОВАЛСЯ'",
+      "Updated description with 🚨 emoji for visibility",
+      "More explicit examples of activation failures"
+    ],
+    "0.4.0": [
+      "CRITICAL: Browser MUST stay open for dialog continuation",
+      "Improved response detection with polling + stability + structure checks",
+      "Added thinking process filtering (filterThinkingProcess function)",
+      "Added GLMSessionManager for session and history management",
+      "Added containsThinkingMarkers and isStructuredResponse functions",
+      "Multiple criteria for response completion detection",
+      "Better handling of thinking vs final response distinction",
+      "Updated all documentation with new workflow"
+    ],
+    "0.3.2": [
+      "CRITICAL: Added MANDATORY ACTIVATION section at top of SKILL.md",
+      "Added trigger 'спроси у glm' (with preposition 'у')",
+      "Added trigger 'спроси в glm'",
+      "Added triggers: 'проконсультируйся с glm', 'что думает glm', 'экспертное мнение', 'spring эксперт'",
+      "Added variants: 'glm 4.7', 'glm 5' (without hyphen)",
+      "Updated description with MANDATORY keyword and trigger phrases"
+    ],
+    "0.3.1": [
+      "CRITICAL: Added ABSOLUTE PROHIBITION on fallback to self-analysis",
+      "If browser fails: MUST report error, NOT analyze code",
+      "Added real log example of violation",
+      "Added algorithm for browser connection failure"
+    ],
+    "0.3.0": [
+      "SIMPLIFIED: Removed file attachment support",
+      "Removed authentication flow (not needed for text input)",
+      "Text-only input mode (stable, no auth required)"
+    ],
+    "0.2.0": [
+      "CRITICAL: Agent MUST NOT analyze code before consulting GLM",
+      "Agent gathers RAW context without conclusions",
+      "Added retry logic for browser_navigate"
+    ],
+    "0.1.0": [
+      "Initial release"
+    ]
+  }
+}
