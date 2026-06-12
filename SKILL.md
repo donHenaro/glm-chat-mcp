@@ -8,7 +8,7 @@ used-by:
  - "Code"
 ---
 # when refactoring, never make changes above this line.
-# GLM Chat MCP Skill v8.0 — Direct API + Playwright Fallback
+# GLM Chat MCP Skill v9.0 — SSE-intercept + Multiturn + Agent Mode
 ---
 
 ## 🔴 ОБЯЗАТЕЛЬНАЯ АКТИВАЦИЯ
@@ -125,34 +125,38 @@ const tokens = await (async () => {
 **Шаг 1:** Установить перехватчик SSE (один раз при старте сессии):
 ```javascript
 // browser_evaluate на вкладке GLM
-window.__sseChunks = [];
-const origFetch = window.fetch;
-window.fetch = async function(...args) {
-  const [url, opts] = args;
-  const response = await origFetch.apply(this, args);
-  if (typeof url === 'string' && url.includes('chat/completions')) {
-    const origBody = response.body;
-    if (origBody) {
-      const reader = origBody.getReader();
-      const decoder = new TextDecoder();
-      const stream = new ReadableStream({
-        async start(controller) {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) { controller.close(); break; }
-            const chunk = decoder.decode(value, { stream: true });
-            window.__sseChunks.push(chunk);
-            controller.enqueue(value);
+// Проверка — установлен ли уже
+if (!window.__sseInterceptorInstalled) {
+  window.__sseChunks = [];
+  const origFetch = window.fetch;
+  window.fetch = async function(...args) {
+    const [url, opts] = args;
+    const response = await origFetch.apply(this, args);
+    if (typeof url === 'string' && url.includes('chat/completions')) {
+      const origBody = response.body;
+      if (origBody) {
+        const reader = origBody.getReader();
+        const decoder = new TextDecoder();
+        const stream = new ReadableStream({
+          async start(controller) {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) { controller.close(); break; }
+              const chunk = decoder.decode(value, { stream: true });
+              window.__sseChunks.push(chunk);
+              controller.enqueue(value);
+            }
           }
-        }
-      });
-      return new Response(stream, {
-        status: response.status, headers: response.headers
-      });
+        });
+        return new Response(stream, {
+          status: response.status, headers: response.headers
+        });
+      }
     }
-  }
-  return response;
-};
+    return response;
+  };
+  window.__sseInterceptorInstalled = true;
+}
 ```
 
 **Шаг 2:** Очистить буфер и отправить через UI:
@@ -290,61 +294,7 @@ data: [DONE]
 
 ---
 
-### Qwen API (Alibaba)
 
-**⚠️ Двухэтапный процесс!**
-
-**Шаг 1:** Создать чат
-```
-POST https://chat.qwen.ai/api/v2/chats/new
-Authorization: Bearer <JWT>
-Body: {"title": "New Chat", "models": ["qwen-max-latest"], "chat_mode": "local", "chat_type": "t2i", "timestamp": <ms>}
-Response: {"data": {"id": "chat-uuid-xxxxx"}}
-```
-
-**Шаг 2:** Chat completion
-```
-POST https://chat.qwen.ai/api/v2/chat/completions?chat_id=<chat_uuid>
-Authorization: Bearer <JWT>
-Headers: source: web, Version: 0.1.13, bx-v: 2.5.31, Origin: https://chat.qwen.ai
-Body: {"model": "qwen-max-latest", "messages": [...], "stream": true, "chat_id": "<chat_uuid>", "web_search": false, "thinking": false}
-```
-
-**Режимы:**
-| Режим | Параметр |
-|-------|----------|
-| Обычный | `"web_search": false, "thinking": false` |
-| Web Search | `"web_search": true` |
-| Reasoning (qwq) | `"thinking": true` + model `"qwq-32b"` |
-
----
-
-### DeepSeek API
-
-**Endpoint:** `POST https://chat.deepseek.com/api/v0/chat/completions`
-
-**Обязательные заголовки:**
-```
-Content-Type: application/json
-Authorization: Bearer <token>
-```
-
-**Payload:**
-```json
-{
-  "model": "deepseek-chat",
-  "messages": [{"role": "user", "content": "Hello"}],
-  "stream": true
-}
-```
-
-**Режимы:**
-| Режим | Параметр |
-|-------|----------|
-| Обычный | `"model": "deepseek-chat"` |
-| Deep Think (R1) | `"model": "deepseek-reasoner"` → `reasoning_content` в delta |
-
----
 
 ## 🔄 Workflow — Пошаговые действия
 
@@ -381,17 +331,17 @@ Authorization: Bearer <token>
 4. Читать ответ: `document.querySelector('#root').innerText` — найти текст после вопроса
 5. Признак завершения: текст перестал меняться (2 polling-цикла подряд одинаковая длина)
 
-### Шаг 4. Fallback на Playwright (если SSE/API не сработали)
+### Шаг 4. Fallback на Playwright (если SSE/DOM не сработали)
 
 | Причина fallback | Действие |
 |-------------------|----------|
 | SSE-перехват не работает | Обновить страницу, переустановить перехватчик |
-| API вернул 401/403 | Обновить токены (refresh), повторить; если не помогло — Playwright |
+| API вернул 401/403 | Обновить токены, retry; если не помогло — Playwright |
 | API timeout (>30с) | Retry 1 раз, затем Playwright |
 | API 429 (rate limit) | Подождать 30с, retry; при повторе — Playwright |
 | Ошибка парсинга ответа | Playwright snapshot как запасной вариант |
 
-### Шаг 4. Playwright-режим (только fallback)
+### Шаг 5. Playwright-режим (только fallback)
 
 1. `browser_snapshot` — проверить состояние страницы
 2. Перейти на нужный URL если не там
@@ -399,13 +349,13 @@ Authorization: Bearer <token>
 4. Ждать ответа (snapshot polling: Stop → Copy/Regenerate)
 5. Прочитать ответ из accessibility tree
 
-### Шаг 5. Обработать ответ
+### Шаг 6. Обработать ответ
 
-**SSE-перехват (GLM):** Парсить `delta_content` из chunks
-**API (Qwen/DeepSeek):** Извлечь `choices[0].message.content` или `reasoning_content`
+**SSE-перехват (GLM/Qwen):** Парсить `delta_content` / `choices[].delta.content` из chunks
+**DOM-чтение (DeepSeek):** Извлечь текст ответа из `#root.innerText`
 **Playwright:** Найти последнее сообщение ассистента в snapshot
 
-### Шаг 5. Записать лог
+### Шаг 7. Записать лог
 
 Сохранить в `log/YYYY-MM-DD/<provider>-chat-log-YYYY-MM-DD.md`
 
@@ -455,27 +405,28 @@ Authorization: Bearer <token>
 
 ### GLM режимы
 
-| Режим | API-параметр | Playwright UI |
-|-------|-------------|---------------|
-| Обычный | по умолчанию | без режима |
-| Deep Think | `"thinking": {"type": "enabled"}` | кнопка "Deep think" |
-| Agent Mode | `"tools": [...], "tool_choice": "auto"` | кнопка "Agent" |
-| Web Search | `"tools": [{"function": {"name": "web_search"}}]` | меню "+" → "Search" |
+| Режим | features-параметр | Playwright UI |
+|-------|-------------------|---------------|
+| Обычный | `web_search:false, auto_web_search:false` | без режима |
+| Deep Think | `enable_thinking:true` + `reasoning_effort:"high"` | кнопка "Deep think" |
+| Agent Mode | `flags:["general_agent"]` + `reasoning_effort:"max"` | кнопка "Agent" |
+| Web Search | `web_search:true` или `auto_web_search:true` | меню "+" → "Search" |
 
 ### Qwen режимы
 
-| Режим | API-параметр | Playwright UI |
-|-------|-------------|---------------|
-| Обычный | `"web_search": false` | без режима |
-| Web Search | `"web_search": true` | toggle Web Search |
-| Reasoning | `"thinking": true`, model `qwq-32b` | выбор модели qwq |
+| Режим | feature_config | Playwright UI |
+|-------|----------------|---------------|
+| Обычный | `thinking_enabled:false, auto_search:false` | без режима |
+| Web Search | `auto_search:true` | toggle Web Search |
+| Deep Think | `thinking_enabled:true, thinking_mode:"Deep"` | выбор модели qwq |
 
 ### DeepSeek режимы
 
-| Режим | API-параметр | Playwright UI |
-|-------|-------------|---------------|
-| Обычный | `"model": "deepseek-chat"` | без режима |
-| Deep Think | `"model": "deepseek-reasoner"` | toggle DeepThink |
+| Режим | UI-действие |
+|-------|------------|
+| Обычный | без режима |
+| Deep Think (R1) | кнопка "DeepThink" toggle |
+| Search | кнопка "Search" toggle |
 
 ### Автоматический выбор режима
 
@@ -489,15 +440,60 @@ Authorization: Bearer <token>
 
 ---
 
-## 📎 Файлы (Playwright только)
+## 🔄 Мультитурновые диалоги (продолжение чата)
 
-1. `browser_click` на "More" / "Add" / "+"
-2. `browser_snapshot` → найти "Upload"
-3. `browser_click` на "Upload"
-4. `browser_upload_file` — передать путь к файлу
+**Все три провайдера хранят контекст на сервере.** Для продолжения диалога —
+просто оставаться на том же URL чата и отправлять следующее сообщение.
 
-**GLM нативно:** `.pdf`, `.docx`, `.xls`, `.xlsx`, `.ppt`, `.pptx`, `.txt`, `.md`, `.py`, `.bmp`, `.gif`, `.mp4`
+### GLM: продолжение
+URL содержит chat_id: `chat.z.ai/c/<uuid>` — отправка в тот же чат = продолжение контекста.
+
+### Qwen: продолжение  
+URL содержит chat_id: `chat.qwen.ai/c/<uuid>` — аналогично.
+
+### DeepSeek: продолжение
+URL содержит session_id: `chat.deepseek.com/a/chat/s/<uuid>` — аналогично.
+
+### Правила мультитурна:
+1. ✅ **НЕ создавать новый чат** если пользователь продолжает ту же тему
+2. ✅ Оставаться на текущем URL — просто отправить следующее сообщение в textarea
+3. ✅ Проверить: если URL содержит UUID чата — мы в существующем диалоге
+4. ⚠️ Новый чат создавать ТОЛЬКО когда пользователь явно просит ("новый чат", "new chat") или тема кардинально меняется
+5. ✅ При мультитурне — SSE-перехватчик работает без переустановки
+
+---
+
+## 📎 Файлы — загрузка в чат
+
+### GLM — загрузка файлов
+1. Нажать кнопку "+" рядом с полем ввода
+2. В открывшемся меню выбрать "Upload" / "Загрузить"
+3. `browser_upload_file` — передать путь к файлу
+4. Файл отобразится как вложение в поле ввода
+5. Отправить сообщение — файл будет обработан вместе с текстом
+
+**Поддерживаемые форматы:** `.pdf`, `.docx`, `.xls`, `.xlsx`, `.ppt`, `.pptx`, `.txt`, `.md`, `.py`, `.bmp`, `.gif`, `.mp4`
 **Конвертировать в `.txt`:** `.java`, `.js`, `.ts`, `.kt`, `.scala`, `.go`, `.rs`, `.cpp`, `.cs`
+
+### Qwen — загрузка файлов
+Аналогично GLM — кнопка "Upload" / вложения в поле ввода.
+
+### DeepSeek — программная загрузка через DataTransfer API
+DeepSeek позволяет загружать файлы программно через `browser_evaluate`:
+```javascript
+// На вкладке DeepSeek
+const fileInput = document.querySelector('input[type="file"]');
+if (fileInput) {
+  const dataTransfer = new DataTransfer();
+  // Для текстовых файлов:
+  const file = new File([content], 'filename.txt', { type: 'text/plain' });
+  dataTransfer.items.add(file);
+  fileInput.files = dataTransfer.files;
+  fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+}
+```
+**Поддерживаемые форматы:** PDF, TXT, CSV, JSON, Python, XLSX, JPEG, PNG, BMP
+**Лимит:** до 50 файлов, макс 100-500 MB
 
 ---
 
@@ -519,13 +515,13 @@ Authorization: Bearer <token>
 
 ```
 ЭТАП 1: Сбор контекста
-ЭТАП 2: Определить режим (API-first)
-ЭТАП 3: Извлечь токены из браузера
-ЭТАП 4: API-запрос через browser_evaluate → fetch()
+ЭТАП 2: Определить провайдера и режим
+ЭТАП 3: Установить SSE-перехватчик (если нет)
+ЭТАП 4: Отправить сообщение через UI (textarea + Enter)
+ЭТАП 5: Прочитать ответ (SSE chunks / DOM innerText)
          ↓ при ошибке
-         Playwright fallback (Шаг 3)
-ЭТАП 5: Анализ ответа
-ЭТАП 6: Записать лог
+         Playwright snapshot fallback
+ЭТАП 6: Обработать ответ, записать лог
 ```
 
 ---
@@ -547,17 +543,54 @@ Authorization: Bearer <token>
 
 ---
 
-## 🏗️ Архитектура (для справки)
+## 🤖 GLM Agent Mode — расширенные возможности
+
+GLM Agent Mode (`flags:["general_agent"]`) даёт доступ к встроенным инструментам:
+
+| Инструмент | Описание | Когда использовать |
+|------------|----------|-------------------|
+| **web_search** | Поиск в интернете | "найди", "актуальная информация", "документация" |
+| **code_execution** | Выполнение Python кода | "вычисли", "протестируй", "запусти код" |
+| **file_operations** | Чтение/создание файлов | "создай файл", "прочитай файл" |
+| **mcp_servers** | Внешние MCP-серверы | Расширенная интеграция |
+
+### Активация Agent Mode:
+- **UI:** Нажать кнопку "Agent" в GLM чате
+- **SSE-перехват:** features автоматически включат `flags:["general_agent"]`
+
+### Преимущества Agent Mode для консультаций:
+- GLM может **исследовать документацию** через web_search
+- GLM может **выполнять код** для валидации решений
+- GLM может **создавать файлы** прямо в чате
+
+⚠️ Agent Mode расходует больше токенов и медленнее обычного режима.
+Использовать только когда нужны инструменты, а не для простых вопросов.
+
+---
+
+## 🔧 SSE-перехватчик — сохранение при навигации
+
+При переходе на новую страницу fetch-патч теряется. Решение:
+
+**Перед каждым использованием проверять наличие патча:**
+```javascript
+// Проверка — установлен ли перехватчик
+if (!window.__sseInterceptorInstalled) {
+  // Установить заново (см. секцию «Стратегия A»)
+  window.__sseInterceptorInstalled = true;
+}
+```
+
+✅ Агент должен проверять `window.__sseInterceptorInstalled` перед каждым запросом.
+Если `undefined` — переустановить патч.
+
+---
+
+## 🏗️ Архитектура проекта
 
 ```
 glm-chat-mcp/                     ← https://github.com/donHenaro/glm-chat-mcp
-├── SKILL.md                      ← этот файл, инструкции агента v8.0
-├── src/                          ← legacy (не запускать вручную)
-├── webchat2api-providers/        ← провайдеры для webchat2api (референс)
-│   ├── glm/models.py, accounts.py, chat.py
-│   ├── qwen/models.py, accounts.py, chat.py
-│   ├── deepseek/models.py, accounts.py, chat.py
-│   └── patches/                  ← патчи для base.py, registry.py
+├── SKILL.md                      ← инструкции агента v9.0
 └── log/                          ← логи чатов
 ```
 
@@ -567,20 +600,22 @@ glm-chat-mcp/                     ← https://github.com/donHenaro/glm-chat-mcp
 
 ## 📝 CHANGELOG
 
-### v8.0.0 (current) — Direct API + Playwright Fallback
-- 🔥 **API-first:** прямые HTTP-запросы к backend API провайдеров через `fetch()`
-- 🔥 **Токены из сессии:** извлечение JWT/cookies из текущего браузера
-- ✅ **GLM API:** `internal-api.z.ai/v1/chat/completions`, Bearer Z.ai + X-Token JWT
-- ✅ **GLM режимы:** thinking: {type: enabled/disabled}, tools: [web_search]
-- ✅ **Qwen API:** двухэтапный — /api/v2/chats/new → /api/v2/chat/completions
-- ✅ **Qwen режимы:** web_search: true/false, thinking: true/false
-- ✅ **DeepSeek API:** /api/v0/chat/completions, model: deepseek-reasoner
-- ✅ **Fallback:** API → Playwright при ошибках/timeout
-- ✅ Консультации: GLM×3, Qwen×2, DeepSeek×1
+### v9.0.0 (current) — SSE-intercept + Multiturn + Agent Mode
+- 🔥 **SSE-перехват:** GLM/Qwen — UI отправка + patched fetch чтение (проверено)
+- 🔥 **DOM-чтение:** DeepSeek — UI отправка + innerText чтение (проверено)
+- ✅ **Мультитурн:** все провайдеры хранят контекст — просто оставаться на URL чата
+- ✅ **Файлы:** GLM/Qwen — UI upload; DeepSeek — DataTransfer API
+- ✅ **Agent Mode (GLM):** web_search, code_execution, file_operations
+- ✅ **SSE-preservation:** проверка __sseInterceptorInstalled перед использованием
+- ✅ **Мёртвый код удалён:** дублирующиеся секции Qwen/DeepSeek API, webchat2api reference
+- ✅ Консультации: GLM×4, Qwen×3, DeepSeek×2
+
+### v8.0.0 — Direct API + Playwright Fallback
+- API-first архитектура с прямым fetch()
+- GLM SSE-intercept, Qwen двухэтапный API, DeepSeek DOM-read
 
 ### v7.0.0
-- Dual-mode архитектура с webchat2api proxy
-- DeepSeek провайдер
+- Dual-mode архитектура с webchat2api proxy, DeepSeek провайдер
 
 ### v6.0.0
 - Qwen провайдер
