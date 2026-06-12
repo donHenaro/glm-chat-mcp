@@ -112,80 +112,159 @@ const tokens = await (async () => {
 
 ---
 
-## ⚡ API-режим: конкретные эндпоинты
+## ⚡ API-режим: три стратегии доступа
 
-### GLM API (ZhiPu AI)
+### Стратегия A: SSE-перехват (рекомендуемая для GLM)
 
-**Endpoint:** `POST https://internal-api.z.ai/v1/chat/completions`
+GLM использует **Svelte + встроенный SHA-256 signature** — подделать подпись сложно.
+Вместо этого агент **отправляет через UI** (textarea + Enter), но **перехватывает SSE-ответ**.
 
-**Обязательные заголовки:**
+**Шаг 1:** Установить перехватчик SSE (один раз при старте сессии):
+```javascript
+// browser_evaluate на вкладке GLM
+window.__sseChunks = [];
+const origFetch = window.fetch;
+window.fetch = async function(...args) {
+  const [url, opts] = args;
+  const response = await origFetch.apply(this, args);
+  if (typeof url === 'string' && url.includes('chat/completions')) {
+    const origBody = response.body;
+    if (origBody) {
+      const reader = origBody.getReader();
+      const decoder = new TextDecoder();
+      const stream = new ReadableStream({
+        async start(controller) {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) { controller.close(); break; }
+            const chunk = decoder.decode(value, { stream: true });
+            window.__sseChunks.push(chunk);
+            controller.enqueue(value);
+          }
+        }
+      });
+      return new Response(stream, {
+        status: response.status, headers: response.headers
+      });
+    }
+  }
+  return response;
+};
 ```
-Content-Type: application/json
-Authorization: Bearer Z.ai
-X-Z-AI-From: Z
-X-Chat-Id: <chat_uuid>
-X-User-Id: <user_uuid>
-X-Token: <JWT>
+
+**Шаг 2:** Очистить буфер и отправить через UI:
+```javascript
+window.__sseChunks = [];
+// Затем: textarea.fill(prompt) + textarea.press('Enter') через Playwright
 ```
 
-**Минимальный payload:**
-```json
-{
-  "messages": [{"role": "user", "content": "Hello"}],
-  "stream": false
-}
+**Шаг 3:** Прочитать SSE-ответ:
+```javascript
+// browser_evaluate — дождаться нужного количества chunks
+const chunks = window.__sseChunks || [];
+// GLM SSE формат (НЕ OpenAI!):
+// data: {"type":"chat:completion","data":{"phase":"other","usage":{...}}}
+// data: {"type":"chat:completion","data":{"delta_content":"Ответ","phase":"answer"}}
+// data: {"type":"chat:completion","data":{"phase":"done","done":true}}
 ```
 
-**Полный payload с опциями:**
-```json
-{
-  "model": "glm-4.7",
-  "messages": [
-    {"role": "system", "content": "You are a helpful assistant."},
-    {"role": "user", "content": "Hello"}
-  ],
-  "stream": true,
-  "thinking": {"type": "disabled"}
-}
+**Парсинг GLM SSE:**
+```javascript
+const chunks = window.__sseChunks || [];
+const fullText = chunks
+  .flatMap(c => c.split('\n'))
+  .filter(line => line.startsWith('data: '))
+  .map(line => { try { return JSON.parse(line.slice(6)); } catch { return null; } })
+  .filter(d => d?.type === 'chat:completion' && d?.data?.delta_content)
+  .map(d => d.data.delta_content)
+  .join('');
+const isDone = chunks.some(c => c.includes('"phase":"done"'));
+return { fullText, isDone };
+```
+
+### Стратегия B: Прямой API-запрос (для Qwen и DeepSeek)
+
+Qwen и DeepSeek **не используют signature** — можно делать прямые fetch-запросы.
+
+---
+
+### GLM API — техническая справка
+
+**Реальный endpoint:** `POST /api/v2/chat/completions?<fingerprint>`
+- Query: timestamp, requestId, user_id, version=0.0.1, platform=web, token=<JWT>, user_agent, language, timezone, screen_*, viewport_*, signature_timestamp
+- Headers: `Authorization: Bearer <JWT>`, `X-FE-Version: prod-fe-1.1.52`, `X-Signature: <SHA-256>`, `X-Region: overseas`
+- Body: `{stream:true, model:"GLM-5.1", messages:[...], signature_prompt:<prompt>, features:{...}}`
+- **X-Signature** — SHA-256 хеш, вычисляемый встроенной sha.js библиотекой из минифицированного бандла
+- ⚠️ **НЕ пытаться подделать подпись** — используй Стратегию A (SSE-перехват)
+
+**GLM SSE формат (собственный, НЕ OpenAI):**
+```
+data: {"type":"chat:completion","data":{"phase":"other","usage":{...}}}
+data: {"type":"chat:completion","data":{"delta_content":"Текст","phase":"answer"}}
+data: {"type":"chat:completion","data":{"phase":"done","done":true,"metadata":{...}}}
+```
+
+**Режимы через features:**
+| Режим | Параметр в features |
+|-------|---------------------|
+| Обычный | `web_search:false, auto_web_search:false` |
+| Deep Think | `enable_thinking:true` + `reasoning_effort:"high"/"max"` |
+| Web Search | `web_search:true` или `auto_web_search:true` |
+| Agent Mode | `flags:["general_agent"]` + `reasoning_effort:"max"` |
+
+---
+
+### Qwen API (Alibaba) — прямой запрос
+
+**Двухэтапный процесс:**
+
+**Шаг 1:** Создать чат
+```
+POST https://chat.qwen.ai/api/v2/chats/new
+Authorization: Bearer <JWT>
+Body: {"title":"New Chat","models":["qwen-max-latest"],"chat_mode":"local","chat_type":"t2i","timestamp":<ms>}
+Response: {"data":{"id":"chat-uuid"}}
+```
+
+**Шаг 2:** Chat completion
+```
+POST https://chat.qwen.ai/api/v2/chat/completions?chat_id=<chat_uuid>
+Authorization: Bearer <JWT>
+Headers: source:web, Version:0.1.13, bx-v:2.5.31, Origin:https://chat.qwen.ai
+Body: {"model":"qwen-max-latest","messages":[...],"stream":true,"chat_id":"<uuid>","web_search":false,"thinking":false}
 ```
 
 **Режимы:**
 | Режим | Параметр |
 |-------|----------|
-| Обычный | `"thinking": {"type": "disabled"}` (по умолчанию) |
-| Deep Think | `"thinking": {"type": "enabled"}` |
-| Web Search | `"tools": [{"type": "function", "function": {"name": "web_search"}}], "tool_choice": "auto"` |
-| Agent Mode | `"tools": [...], "tool_choice": "auto"` |
+| Обычный | `web_search:false, thinking:false` |
+| Web Search | `web_search:true` |
+| Reasoning | `thinking:true` + model `qwq-32b` |
 
-**SSE формат:** OpenAI-совместимый:
+---
+
+### DeepSeek API — прямой запрос
+
+**Endpoint:** `POST https://chat.deepseek.com/api/v0/chat/completions`
+
+**Обязательные заголовки:**
 ```
-data: {"choices":[{"delta":{"content":"Hello"}}]}
-data: {"choices":[{"delta":{"reasoning_content":"Let me think..."}}]}  ← Deep Think
-data: {"choices":[{"delta":{"tool_calls":[...]}}]}  ← Agent/Web Search
-data: [DONE]
+Content-Type: application/json
+Authorization: Bearer <token>
 ```
 
-**Rate limits:** 300/day, 2 QPS, 30/10min
-
-**Вызов через browser_evaluate:**
-```javascript
-const response = await fetch('https://internal-api.z.ai/v1/chat/completions', {
-  method: 'POST',
-  headers: {
-    'Content-Type': 'application/json',
-    'Authorization': 'Bearer Z.ai',
-    'X-Z-AI-From': 'Z',
-    'X-Chat-Id': chatId,
-    'X-User-Id': userId,
-    'X-Token': jwt
-  },
-  body: JSON.stringify({
-    messages: [{role: 'user', content: 'Hello'}],
-    stream: false
-  })
-});
-const data = await response.json();
+**Payload:**
+```json
+{"model":"deepseek-chat","messages":[{"role":"user","content":"Hello"}],"stream":true}
 ```
+
+**Режимы:**
+| Режим | Параметр |
+|-------|----------|
+| Обычный | `model:"deepseek-chat"` |
+| Deep Think (R1) | `model:"deepseek-reasoner"` → `reasoning_content` в delta |
+
+⚠️ **КРИТИЧЕСКОЕ DeepSeek правило:** `reasoning_content` **обязателен** (даже пустой) в messages ассистента при tool_calls — иначе HTTP 400!
 
 ---
 
@@ -256,22 +335,34 @@ Authorization: Bearer <token>
 | `deepseek` | DeepSeek |
 | Не указан | GLM |
 
-### Шаг 1. Попробовать API-режим
+### Шаг 1. GLM — SSE-перехват (Стратегия A)
 
-1. Извлечь токены из текущей сессии браузера (см. секцию «Получение токенов»)
-2. Если токены есть → отправить API-запрос через `browser_evaluate` с `fetch()`
-3. Если ответ успешен → перейти к Шагу 4
+1. Проверить есть ли SSE-перехватчик (`window.__sseChunks`)
+2. Если нет — установить (один раз при старте сессии, см. «Стратегия A»)
+3. Очистить буфер: `window.__sseChunks = []`
+4. Отправить сообщение через UI: `textarea.fill(prompt)` → `Enter`
+5. Ждать ответ: polling `window.__sseChunks` каждые 3-5 сек, пока не появится `phase:"done"`
+6. Парсить SSE chunks → извлечь `delta_content` → вернуть текст
 
-### Шаг 2. Fallback на Playwright (если API не сработал)
+### Шаг 2. Qwen / DeepSeek — Прямой API (Стратегия B)
+
+1. Извлечь токены из localStorage/cookies (см. секцию «Получение токенов»)
+2. Отправить fetch-запрос к API провайдера
+3. Если Qwen — сначала `chats/new`, потом `completions`
+4. Если DeepSeek — сразу `completions`
+5. Прочитать SSE stream или JSON ответ
+
+### Шаг 3. Fallback на Playwright (если API не сработал)
 
 | Причина fallback | Действие |
 |-------------------|----------|
-| Токены не найдены | Перейти на сайт провайдера, залогиниться, повторить |
+| SSE-перехват не работает | Обновить страницу, переустановить перехватчик |
 | API вернул 401/403 | Обновить токены (refresh), повторить; если не помогло — Playwright |
 | API timeout (>30с) | Retry 1 раз, затем Playwright |
 | API 429 (rate limit) | Подождать 30с, retry; при повторе — Playwright |
+| Ошибка парсинга ответа | Playwright snapshot как запасной вариант |
 
-### Шаг 3. Playwright-режим
+### Шаг 4. Playwright-режим (только fallback)
 
 1. `browser_snapshot` — проверить состояние страницы
 2. Перейти на нужный URL если не там
@@ -279,9 +370,10 @@ Authorization: Bearer <token>
 4. Ждать ответа (snapshot polling: Stop → Copy/Regenerate)
 5. Прочитать ответ из accessibility tree
 
-### Шаг 4. Обработать ответ
+### Шаг 5. Обработать ответ
 
-**API:** Извлечь `choices[0].message.content` (или `reasoning_content`)
+**SSE-перехват (GLM):** Парсить `delta_content` из chunks
+**API (Qwen/DeepSeek):** Извлечь `choices[0].message.content` или `reasoning_content`
 **Playwright:** Найти последнее сообщение ассистента в snapshot
 
 ### Шаг 5. Записать лог
