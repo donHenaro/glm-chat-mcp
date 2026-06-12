@@ -1,39 +1,48 @@
 # Qwen Chat Log — 2026-06-12
 
-| Дата | Время | UUID | Тема | URL | Провайдер | Статус |
-|------|-------|------|------|-----|-----------|--------|
-| 2026-06-12 | 12:05 | 9999cf8a-e353-407c-a56b-014d37bf966a | Интеграция webchat2api — консультация по Qwen/DeepSeek provider | https://chat.qwen.ai/c/9999cf8a-e353-407c-a56b-014d37bf966a | Qwen | ✅ |
+| Дата | Время | UUID | Тема | URL | Провайдер | Mode | Статус |
+|------|-------|------|------|-----|-----------|------|--------|
+| 2026-06-12 | 12:05 | 9999cf8a | Интеграция webchat2api — архитектура | https://chat.qwen.ai/c/9999cf8a | Qwen | API | ✅ |
+| 2026-06-12 | 12:17 | 25afd4a7 | Qwen chat.py реализация — API спецификация | https://chat.qwen.ai/c/25afd4a7 | Qwen | API | ✅ |
 
-## Резюме ответа Qwen
+## Консультация 2: Qwen API спецификация (UUID: 25afd4a7)
 
-### 1. QWEN-PROVIDER
-- Авторизация: Bearer Token (JWT) + cookies (cna, cnaui, token)
-- Endpoint: https://chat.qwen.ai/api/v1/chat/completions (SSE streaming)
-- Модели: qwen-max-latest, qwen-plus-latest, qwen-turbo-latest, qwq-32b (reasoning), qwen2.5-coder-32b, qwen2.5-vl-32b
-- Структура: services/providers/qwen/ (models.py, accounts.py, chat/client.py)
+### Ключевое открытие: Двухэтапный процесс!
 
-### 2. WEB SEARCH: параметр, не модель
-- Рекомендация: extra_body.enable_search = true
-- Альтернатива: model-суффиксы (qwen-max-latest-search)
-- Qwen возвращает web_search_info → маппить в url_citation
+Qwen использует двухэтапный процесс для чата:
 
-### 3. DUAL-MODE: API-first с Playwright fallback
-- Qwen имеет стабильный SSE endpoint, не требует рендеринга
-- Нет Cloudflare challenges (в отличие от Grok)
-- Playwright fallback при 401/403 + failed refresh
+**Шаг 1: Создание чата**
+```
+POST https://chat.qwen.ai/api/v2/chats/new
+Authorization: Bearer <JWT>
+Body: {"title": "New Chat", "models": ["qwen-max-latest"], "chat_mode": "local", "chat_type": "t2i", "timestamp": ...}
+Response: {"data": {"id": "chat-uuid-xxxxx"}}
+```
 
-### 4. DEEPSEEK: очень похож на Qwen
-- Endpoint: https://chat.deepseek.com/api/v0/chat/completions
-- Копипаст Qwen provider с минимальными изменениями
-- Нет веб-поиска (проще)
-- Токены живут дольше (стабильнее)
+**Шаг 2: Chat Completions**
+```
+POST https://chat.qwen.ai/api/v2/chat/completions?chat_id=chat-uuid-xxxxx
+Authorization: Bearer <JWT>
+Headers: source: web, Version: 0.1.13, bx-v: 2.5.31, Origin, Referer
+Body: {"model": "qwen-max-latest", "messages": [...], "stream": true, "chat_id": "chat-uuid-xxxxx", "web_search": false, "thinking": false}
+```
 
-### 5. ПРИОРИТЕТЫ (по неделям)
-- Неделя 1: GLM provider (порт ZtoApi) + базовая инфраструктура
-- Неделя 2: Qwen provider + web search
-- Неделя 3: DeepSeek + финализация
+### Обязательные заголовки
+- Authorization: Bearer JWT
+- Cookie: cna, cnaui, ssxmod_itna, ssxmod_itna2
+- source: web
+- Version: 0.1.13
+- bx-v: 2.5.31
+- Origin: https://chat.qwen.ai
+- Referer: https://chat.qwen.ai/c/guest
 
-### Риски
-- Qwen токены быстро истекают → автоматический refresh + Playwright fallback
-- Cloudflare → proxies + rotate UA
-- Rate limiting → пул аккаунтов + ротация
+### Web Search
+- Параметр в body: `"web_search": true`
+- Отдельные модели с суффиксом -search
+
+### Thinking (Reasoning)
+- Параметр в body: `"thinking": true` (для qwq-32b)
+
+### Refresh Token
+- Токены истекают быстрее чем GPT
+- Нужен автоматический refresh механизм

@@ -1,0 +1,85 @@
+"""
+Patches for webchat2api registry.py — register GLM, Qwen, DeepSeek providers.
+
+Apply these changes to: services/providers/registry.py
+"""
+
+# ── 1. Add imports ────────────────────────────────────────────────────
+
+from services.providers.base import (
+    GEMINI_PROVIDER,
+    GLM_PROVIDER,          # NEW
+    GPT_PROVIDER,
+    GROK_PROVIDER,
+    QWEN_PROVIDER,         # NEW
+    DEEPSEEK_PROVIDER,     # NEW
+    SUPPORTED_PROVIDERS,
+    ChatAdapter,
+    ImageAdapter,
+    ModelCapability,
+    ModelSpec,
+    ProviderDefinition,
+    AccountAdapter,
+)
+
+from services.providers.glm.models import GLM_MODEL_SPECS        # NEW
+from services.providers.qwen.models import QWEN_MODEL_SPECS      # NEW
+from services.providers.deepseek.models import DEEPSEEK_MODEL_SPECS  # NEW
+
+# ── 2. Update _PROVIDER_MODEL_SPECS ───────────────────────────────────
+
+_PROVIDER_MODEL_SPECS = {
+    GPT_PROVIDER: tuple(GPT_MODEL_SPECS),
+    GROK_PROVIDER: tuple(GROK_MODEL_SPECS),
+    GEMINI_PROVIDER: tuple(GEMINI_MODEL_SPECS),
+    GLM_PROVIDER: tuple(GLM_MODEL_SPECS),          # NEW
+    QWEN_PROVIDER: tuple(QWEN_MODEL_SPECS),         # NEW
+    DEEPSEEK_PROVIDER: tuple(DEEPSEEK_MODEL_SPECS), # NEW
+}
+
+# ── 3. Update _PROVIDER_OWNERS ────────────────────────────────────────
+
+_PROVIDER_OWNERS = {
+    GPT_PROVIDER: "chatgpt",
+    GROK_PROVIDER: "xai",
+    GEMINI_PROVIDER: "google",
+    GLM_PROVIDER: "zhipu",        # NEW
+    QWEN_PROVIDER: "alibaba",     # NEW
+    DEEPSEEK_PROVIDER: "deepseek", # NEW
+}
+
+# ── 4. Update _PROVIDER_CAPABILITIES ──────────────────────────────────
+
+_PROVIDER_CAPABILITIES: dict[str, frozenset[ModelCapability]] = {
+    GPT_PROVIDER: frozenset({"chat", "image", "image_edit"}),
+    GROK_PROVIDER: frozenset({"chat", "image", "image_edit"}),
+    GEMINI_PROVIDER: frozenset({"chat"}),
+    GLM_PROVIDER: frozenset({"chat"}),            # NEW — image later
+    QWEN_PROVIDER: frozenset({"chat"}),           # NEW — image later
+    DEEPSEEK_PROVIDER: frozenset({"chat"}),       # NEW — no image
+}
+
+# ── 5. Update normalize_provider() ────────────────────────────────────
+
+def normalize_provider(value: object, *, strict: bool = False) -> str:
+    provider = str(value or "").strip().lower().replace("_", "-")
+    if provider in {"", "openai", "chatgpt", "chat-gpt", "gpt"}:
+        return GPT_PROVIDER
+    if provider in {"grok", "xai", "x-ai"}:
+        return GROK_PROVIDER
+    if provider in {"gemini", "google", "bard"}:
+        return GEMINI_PROVIDER
+    if provider in {"glm", "zhipu", "zhi-pu", "zai"}:      # NEW
+        return GLM_PROVIDER
+    if provider in {"qwen", "alibaba", "ali"}:              # NEW
+        return QWEN_PROVIDER
+    if provider in {"deepseek", "deep-seek", "ds"}:         # NEW
+        return DEEPSEEK_PROVIDER
+    if strict:
+        raise ValueError(f"unsupported provider: {value}")
+    return GPT_PROVIDER
+
+# ── 6. Update IMAGE_MODEL_IDS ─────────────────────────────────────────
+
+# GLM/Qwen/DeepSeek currently have no image models
+# IMAGE_MODEL_IDS = GPT_IMAGE_MODEL_IDS | GROK_IMAGE_MODEL_IDS  # unchanged
