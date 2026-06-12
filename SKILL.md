@@ -8,7 +8,7 @@ used-by:
  - "Code"
 ---
 # when refactoring, never make changes above this line.
-# GLM Chat MCP Skill v9.0 — SSE-intercept + Multiturn + Agent Mode
+# GLM Chat MCP Skill v10.0 — Copy/Regenerate Detection + Compact
 ---
 
 ## 🔴 ОБЯЗАТЕЛЬНАЯ АКТИВАЦИЯ
@@ -114,279 +114,131 @@ const tokens = await (async () => {
 
 ## ⚡ API-режим: три стратегии доступа
 
-### Стратегия A: SSE-перехват (GLM) + DOM-чтение (DeepSeek)
+### Стратегия: UI-отправка + Copy/Regenerate Detection
 
-**GLM:** Использует SHA-256 X-Signature → SSE-перехват (отправка через UI, чтение через patched fetch)
-**DeepSeek:** Использует Proof-of-Work challenge → DOM-чтение (отправка через UI, чтение innerText из #root)
+**Все 3 провайдера** используют защитные механизмы (X-Signature, PoW, Message Tree),
+поэтому прямой API **не рекомендуется**. Вместо этого:
 
-Оба провайдера требуют отправку через UI (textarea + Enter), но чтение ответа
-можно ускорить: GLM — через SSE chunks, DeepSeek — через DOM innerText.
+**Отправка:** через UI (textarea + Enter) — подписи и PoW обрабатываются автоматически
+**Чтение:** двухфазный детектор — Stop → Copy/Regenerate
 
-**Шаг 1:** Установить перехватчик SSE (один раз при старте сессии):
+**Фаза 1 (0-15 сек):** Ждём появления Stop → генерация началась
+**Фаза 2 (до timeout):** Ждём Copy/Regenerate (стабильны 3 сек) → генерация завершена
+
+**Иерархия надёжности детекции (по данным GLM):**
+| Приоритет | Индикатор | Надёжность |
+|:---------:|-----------|:----------:|
+| 🥇 1 | Кнопки Copy / Regenerate | ⭐⭐⭐⭐⭐ |
+| 🥈 2 | Исчезновение Stop | ⭐⭐⭐⭐ |
+| 🥉 3 | Исчезновение thinking | ⭐⭐⭐ |
+| 4 | innerText.length стабильность | ⭐⭐ (fallback) |
+
+**Таймауты по режиму:**
+| Режим | Таймаут | Обычно |
+|-------|---------|--------|
+| Chat Mode | 60 сек | 5-15 сек |
+| Deep Think | 120 сек | 30-90 сек |
+| Agent Mode | 300 сек | 1-5 мин |
+
+**Чтение ответа:** после завершения — `browser_evaluate`:
 ```javascript
-// browser_evaluate на вкладке GLM
-// Проверка — установлен ли уже
-if (!window.__sseInterceptorInstalled) {
-  window.__sseChunks = [];
-  const origFetch = window.fetch;
-  window.fetch = async function(...args) {
-    const [url, opts] = args;
-    const response = await origFetch.apply(this, args);
-    if (typeof url === 'string' && url.includes('chat/completions')) {
-      const origBody = response.body;
-      if (origBody) {
-        const reader = origBody.getReader();
-        const decoder = new TextDecoder();
-        const stream = new ReadableStream({
-          async start(controller) {
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) { controller.close(); break; }
-              const chunk = decoder.decode(value, { stream: true });
-              window.__sseChunks.push(chunk);
-              controller.enqueue(value);
-            }
-          }
-        });
-        return new Response(stream, {
-          status: response.status, headers: response.headers
-        });
-      }
-    }
-    return response;
-  };
-  window.__sseInterceptorInstalled = true;
-}
+const msgs = document.querySelectorAll('.chat-assistant .markdown-prose');
+const text = msgs[msgs.length - 1]?.innerText || '';
 ```
 
-**Шаг 2:** Очистить буфер и отправить через UI:
-```javascript
-window.__sseChunks = [];
-// Затем: textarea.fill(prompt) + textarea.press('Enter') через Playwright
-```
+⚠️ Agent Mode: между tool calls кнопки Copy/Regenerate могут мигнуть и исчезнуть.
+Подождать 3 сек и перепроверить — если стабильны → ответ готов.
 
-**Шаг 3 (рекомендуемый): Bubble-reading** — чтение из DOM пузыря:
-```javascript
-// Универсальный метод для ВСЕХ провайдеров
-// Пузырь — это контейнер сообщения ассистента, который постепенно заполняется текстом
-// Отслеживаем .markdown-prose или аналогичный контейнер
-
-// GLM: .chat-assistant .markdown-prose
-// Qwen: .chat-messages (последний блок ассистента)
-// DeepSeek: #root (последний блок ответа)
-
-const result = await (async () => {
-  let stableCount = 0;
-  let lastLen = -1;
-  
-  for (let i = 0; i < 30; i++) { // макс 150 сек (30 × 5с)
-    await new Promise(r => setTimeout(r, 5000));
-    
-    // Находим последний пузырь ответа
-    const msgs = document.querySelectorAll('.chat-assistant .markdown-prose');
-    const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : null;
-    const text = lastMsg?.innerText || '';
-    
-    if (text.length === lastLen && text.length > 0) {
-      stableCount++;
-      if (stableCount >= 3) return { text, done: true }; // 15 сек без изменений = готово
-    } else {
-      stableCount = 0;
-    }
-    lastLen = text.length;
-  }
-  return { text, done: false }; // таймаут
-})();
-```
-
-**Преимущества bubble-reading:**
-- ⚡ Не нужен SSE-перехват — не патчим fetch (нет риска потери патча при навигации)
-- 🎯 Работает для ВСЕХ провайдеров (GLM, Qwen, DeepSeek)
-- 🛡️ Не ломается при Agent Mode (Agent Mode может вызывать beforeunload — SSE-патч теряется)
-- 📊 Видим финальный отрендеренный текст (markdown → HTML → innerText)
-
-**Шаг 3 (альтернативный): SSE-intercept** — для GLM только, когда нужен streaming:
-```javascript
-// Парсинг GLM SSE (собственный формат, НЕ OpenAI):
-const chunks = window.__sseChunks || [];
-const fullText = chunks
-  .flatMap(c => c.split('\n'))
-  .filter(line => line.startsWith('data: '))
-  .map(line => { try { return JSON.parse(line.slice(6)); } catch { return null; } })
-  .filter(d => d?.type === 'chat:completion' && d?.data?.delta_content)
-  .map(d => d.data.delta_content)
-  .join('');
-const isDone = chunks.some(c => c.includes('"phase":"done"'));
-return { fullText, isDone };
-```
-
-### Стратегия B: Прямой API-запрос (НЕ рекомендуется)
-
-Qwen использует **message tree** (parentId/childrenIds/fid) вместо простого массива messages —
-прямой API сложен в реализации. Рекомендуется SSE-перехват (Стратегия A).
+SSE-intercept доступен как альтернатива для streaming (см. [reference.md](reference.md))
 
 ---
 
-### GLM API — техническая справка
+### Техническая справка → [reference.md](reference.md)
 
-**Реальный endpoint:** `POST /api/v2/chat/completions?<fingerprint>`
-- Query: timestamp, requestId, user_id, version=0.0.1, platform=web, token=<JWT>, user_agent, language, timezone, screen_*, viewport_*, signature_timestamp
-- Headers: `Authorization: Bearer <JWT>`, `X-FE-Version: prod-fe-1.1.52`, `X-Signature: <SHA-256>`, `X-Region: overseas`
-- Body: `{stream:true, model:"GLM-5.1", messages:[...], signature_prompt:<prompt>, features:{...}}`
-- **X-Signature** — SHA-256 хеш, вычисляемый встроенной sha.js библиотекой из минифицированного бандла
-- ⚠️ **НЕ пытаться подделать подпись** — используй Стратегию A (SSE-перехват)
-
-**GLM SSE формат (собственный, НЕ OpenAI):**
-```
-data: {"type":"chat:completion","data":{"phase":"other","usage":{...}}}
-data: {"type":"chat:completion","data":{"delta_content":"Текст","phase":"answer"}}
-data: {"type":"chat:completion","data":{"phase":"done","done":true,"metadata":{...}}}
-```
-
-**Режимы через features:**
-| Режим | Параметр в features |
-|-------|---------------------|
-| Обычный | `web_search:false, auto_web_search:false` |
-| Deep Think | `enable_thinking:true` + `reasoning_effort:"high"/"max"` |
-| Web Search | `web_search:true` или `auto_web_search:true` |
-| Agent Mode | `flags:["general_agent"]` + `reasoning_effort:"max"` |
+Детальная информация по API (эндпоинты, заголовки, SSE-форматы, токены) вынесена в отдельный файл.
+В SKILL.md — только workflow и инструкции для агента.
 
 ---
 
-### Qwen API (Alibaba) — через SSE-перехват (рекомендуемая)
-
-⚠️ Прямой API Qwen **сложнее чем казалось** — messages требуют дерево (parentId/childrenIds/fid),
-а не простой массив. Рекомендуется SSE-перехват как для GLM.
-
-**Реальный формат перехваченного запроса:**
-```
-POST /api/v2/chat/completions?chat_id=<uuid>
-Headers: Authorization: Bearer <JWT>, Version: 0.2.64, source: web, X-Accel-Buffering: no
-Body: {
-  "stream": true,
-  "version": "2.1",
-  "incremental_output": true,
-  "chat_id": "<uuid>",
-  "chat_mode": "normal",
-  "model": "qwen3.7-plus",
-  "messages": [{
-    "fid": "<uuid>", "parentId": "<uuid>", "childrenIds": ["<uuid>"],
-    "role": "user", "content": "...", "user_action": "chat",
-    "files": [], "timestamp": <unix>, "models": ["qwen3.7-plus"],
-    "chat_type": "t2t",
-    "feature_config": {
-      "thinking_enabled": true, "thinking_mode": "Auto",
-      "thinking_format": "summary", "auto_search": true
-    }
-  }]
-}
-```
-
-**Шаг 1 (для прямого API):** `POST /api/v2/chats/new` с `models:["qwen3.7-plus"], chat_mode:"normal", chat_type:"t2t"`
-**Шаг 2:** `POST /api/v2/chat/completions?chat_id=<id>` с message tree
-
-**Режимы через feature_config:**
-| Режим | Параметр |
-|-------|----------|
-| Обычный | `thinking_enabled:false, auto_search:false` |
-| Web Search | `auto_search:true` |
-| Deep Think | `thinking_enabled:true, thinking_mode:"Deep"` |
-
-**Реальные модели Qwen:** `qwen3.7-plus`, `qwen3.7-max`, `qwen3.7-turbo`, `qwq-32b`
+### Qwen API
+⚠️ Прямой API сложен (message tree). Через UI-отправку + Copy/Regenerate detection.
+Модели: `qwen3.7-plus`, `qwen3.7-max`, `qwq-32b` | См. [reference.md](reference.md)
 
 ---
 
-### DeepSeek API — техническая справка
-
-**Реальный endpoint:** `POST /api/v0/chat/completion`
-**⚠️ Proof-of-Work!** Перед каждым запросом:
-1. `POST /api/v0/chat/create_pow_challenge` — получить challenge
-2. Решить PoW (SHA-256 hashcash) в браузере
-3. `POST /api/v0/chat/completion` — с решённым PoW в заголовке
-
-**Auth:** `Bearer <userToken>` (из localStorage.userToken.value)
-
-⚠️ **НЕ пытаться подделать PoW** — используй Стратегию A (SSE-перехват)
-
-**SSE формат:** OpenAI-совместимый:
-```
-data: {"choices":[{"delta":{"content":"Текст"}}]}
-data: {"choices":[{"delta":{"reasoning_content":"Думаем..."}}]}  ← R1
-data: [DONE]
-```
-
-**Режимы:**
-| Режим | Параметр |
-|-------|----------|
-| Обычный | `model:"deepseek-chat"` |
-| Deep Think (R1) | `model:"deepseek-reasoner"` → `reasoning_content` в delta |
-
-⚠️ **КРИТИЧЕСКОЕ:** `reasoning_content` **обязателен** (даже пустой) в messages ассистента при tool_calls — иначе HTTP 400!
+### DeepSeek API
+⚠️ PoW challenge перед каждым запросом. Через UI-отправку + Copy/Regenerate detection.
+Модели: `deepseek-chat`, `deepseek-reasoner` | См. [reference.md](reference.md)
 
 ---
 
 
 
-## 🔄 Workflow — Пошаговые действия
+## 🔄 Workflow — Универсальный для всех провайдеров
 
-### Шаг 0. Определить провайдера
+### Шаг 0. Определить провайдера и режим
 
-| Триггер | Провайдер |
-|---------|-----------|
-| `glm`, `zai` | GLM |
-| `qwen` | Qwen |
-| `deepseek` | DeepSeek |
-| Не указан | GLM |
+| Триггер | Провайдер | Default Mode |
+|---------|-----------|-------------|
+| `glm`, `zai` | GLM | Chat (5-15 сек) |
+| `qwen` | Qwen | Chat |
+| `deepseek` | DeepSeek | Chat |
+| Не указан | GLM | Chat |
 
-### Шаг 1. GLM — SSE-перехват (Стратегия A)
+**Agent Mode триггеры:** `найди`, `проанализируй`, `выполни код`, `исследуй`, `agent`, `web search`
 
-1. Проверить есть ли SSE-перехватчик (`window.__sseChunks`)
-2. Если нет — установить (один раз при старте сессии, см. «Стратегия A»)
-3. Очистить буфер: `window.__sseChunks = []`
-4. Отправить сообщение через UI: `textarea.fill(prompt)` → `Enter`
-5. Ждать ответ: polling `window.__sseChunks` каждые 3-5 сек, пока не появится `phase:"done"`
-6. Парсить SSE chunks → извлечь `delta_content` → вернуть текст
+### Шаг 1. Проверить лог и найти существующий чат
 
-### Шаг 2. Qwen — SSE-перехват (Стратегия A)
+Открыть `log/YYYY-MM-DD/<provider>-chat-log-YYYY-MM-DD.md`.
+Если найден чат по теме — перейти через `browser_navigate` на URL чата.
 
-1. Переключиться на вкладку Qwen
-2. Установить SSE-перехватчик (аналогично GLM)
-3. Очистить буфер, отправить через UI, прочитать SSE
-4. Парсинг Qwen SSE — формат отличается от GLM, нужен анализ
+### Шаг 2. Переключиться на нужную вкладку
 
-### Шаг 3. DeepSeek — DOM-чтение (Стратегия A-variant)
+| Провайдер | URL |
+|-----------|-----|
+| GLM | `https://chat.z.ai/c/<UUID>` |
+| Qwen | `https://chat.qwen.ai/c/<UUID>` |
+| DeepSeek | `https://chat.deepseek.com/a/chat/s/<UUID>` |
 
-1. Переключиться на вкладку DeepSeek
-2. Отправить сообщение через UI: textarea.fill(prompt) → Enter
-3. Ждать ответ: polling DOM каждые 3-5 сек
-4. Читать ответ: `document.querySelector('#root').innerText` — найти текст после вопроса
-5. Признак завершения: текст перестал меняться (2 polling-цикла подряд одинаковая длина)
+Если вкладка не открыта — `browser_navigate` на URL провайдера.
 
-### Шаг 4. Fallback на Playwright (если SSE/DOM не сработали)
+### Шаг 3. Выбрать режим (при необходимости)
 
-| Причина fallback | Действие |
-|-------------------|----------|
-| SSE-перехват не работает | Обновить страницу, переустановить перехватчик |
-| API вернул 401/403 | Обновить токены, retry; если не помогло — Playwright |
-| API timeout (>30с) | Retry 1 раз, затем Playwright |
-| API 429 (rate limit) | Подождать 30с, retry; при повторе — Playwright |
-| Ошибка парсинга ответа | Playwright snapshot как запасной вариант |
+`browser_snapshot` → найти кнопку режима → `browser_click`
 
-### Шаг 5. Playwright-режим (только fallback)
+| GLM | Qwen | DeepSeek |
+|-----|------|----------|
+| Agent, Deep Think, Web Search | Search toggle, Model select | DeepThink toggle |
 
-1. `browser_snapshot` — проверить состояние страницы
-2. Перейти на нужный URL если не там
-3. Ввести сообщение в поле ввода → Enter
-4. Ждать ответа (snapshot polling: Stop → Copy/Regenerate)
-5. Прочитать ответ из accessibility tree
+### Шаг 4. Отправить сообщение
 
-### Шаг 6. Обработать ответ
+`browser_click` на textarea → `browser_type` текст → `browser_press_key` Enter
 
-**SSE-перехват (GLM/Qwen):** Парсить `delta_content` / `choices[].delta.content` из chunks
-**DOM-чтение (DeepSeek):** Извлечь текст ответа из `#root.innerText`
-**Playwright:** Найти последнее сообщение ассистента в snapshot
+### Шаг 5. Ожидание ответа — двухфазный детектор
+
+**Фаза 1:** Ждём Stop button (0-15 сек) — генерация началась
+**Фаза 2:** Ждём Copy/Regenerate (до timeout) — генерация завершена
+
+| Режим | Таймаут Фазы 2 |
+|-------|----------------|
+| Chat | 60 сек |
+| Deep Think | 120 сек |
+| Agent Mode | 300 сек |
+
+⚠️ В Agent Mode: после первого появления Copy — подождать 3 сек и перепроверить (кнопки могут мигнуть между tool calls).
+
+### Шаг 6. Прочитать ответ
+
+`browser_evaluate` — извлечь текст из DOM:
+```javascript
+// GLM
+const msgs = document.querySelectorAll('.chat-assistant .markdown-prose');
+const text = msgs[msgs.length - 1]?.innerText || '';
+```
 
 ### Шаг 7. Записать лог
+
+`log/YYYY-MM-DD/<provider>-chat-log-YYYY-MM-DD.md`
 
 Сохранить в `log/YYYY-MM-DD/<provider>-chat-log-YYYY-MM-DD.md`
 
@@ -646,9 +498,9 @@ Agent Mode может вызывать `browser_automation` — навигаци
 Это вызывает **beforeunload** диалог, который **блокирует Playwright**.
 
 **Решения:**
-1. ✅ Использовать **bubble-reading** вместо SSE-intercept (не патчим fetch)
+1. ✅ Использовать **Copy/Regenerate detection** (не патчим fetch)
 2. ✅ Проверять URL перед чтением ответа — если GLM ушёл, вернуться назад
-3. ❌ Не использовать SSE-intercept при Agent Mode — патч теряется при навигации
+3. ❌ Не патчить fetch при Agent Mode — beforeunload блокирует Playwright
   3. file_operations: создать исправленный файл
   4. Вернуть патч пользователю
 ```
@@ -692,29 +544,12 @@ VeAI (оркестратор)
 
 ---
 
-## 🔧 SSE-перехватчик — сохранение при навигации
-
-При переходе на новую страницу fetch-патч теряется. Решение:
-
-**Перед каждым использованием проверять наличие патча:**
-```javascript
-// Проверка — установлен ли перехватчик
-if (!window.__sseInterceptorInstalled) {
-  // Установить заново (см. секцию «Стратегия A»)
-  window.__sseInterceptorInstalled = true;
-}
-```
-
-✅ Агент должен проверять `window.__sseInterceptorInstalled` перед каждым запросом.
-Если `undefined` — переустановить патч.
-
----
-
 ## 🏗️ Архитектура проекта
 
 ```
 glm-chat-mcp/                     ← https://github.com/donHenaro/glm-chat-mcp
-├── SKILL.md                      ← инструкции агента v9.0
+├── SKILL.md                      ← инструкции агента (этот файл)
+├── reference.md                  ← техническая справка API
 └── log/                          ← логи чатов
 ```
 
@@ -724,7 +559,21 @@ glm-chat-mcp/                     ← https://github.com/donHenaro/glm-chat-mcp
 
 ## 📝 CHANGELOG
 
-### v9.0.0 (current) — SSE-intercept + Multiturn + Agent Mode
+### v10.0.0 (current) — Copy/Regenerate Detection + Compact
+
+**Breaking changes:**
+- Response detection: bubble-reading (15 сек stability) → Copy/Regenerate buttons (мгновенная детекция)
+- Двухфазный детектор: Фаза 1 (Stop visible) → Фаза 2 (Copy/Regenerate stable 3 сек)
+- Таймауты по режиму: Chat=60с, DeepThink=120с, Agent=300с
+- SSE-intercept вынесен в reference.md (больше не primary)
+- SKILL.md сжат: 756 → 664 строки
+
+### v9.2 — bubble-reading, Agent Mode docs, beforeunload fix
+
+- Bubble-reading как primary (позже заменён на Copy/Regenerate)
+- Agent Mode документация, beforeunload warning
+
+### v9.0 — multiturn, files, Agent Mode, dead code cleanup
 - 🔥 **SSE-перехват:** GLM/Qwen — UI отправка + patched fetch чтение (проверено)
 - 🔥 **DOM-чтение:** DeepSeek — UI отправка + innerText чтение (проверено)
 - ✅ **Мультитурн:** все провайдеры хранят контекст — просто оставаться на URL чата
@@ -736,7 +585,7 @@ glm-chat-mcp/                     ← https://github.com/donHenaro/glm-chat-mcp
 
 ### v8.0.0 — Direct API + Playwright Fallback
 - API-first архитектура с прямым fetch()
-- GLM SSE-intercept, Qwen двухэтапный API, DeepSeek DOM-read
+- Copy/Regenerate detection, двухфазный детектор, reference.md
 
 ### v7.0.0
 - Dual-mode архитектура с webchat2api proxy, DeepSeek провайдер
