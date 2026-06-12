@@ -146,10 +146,10 @@ return { thought: thought.slice(0,200), tools: toolCalls.length, textLen: mainTe
 ```
 
 ### Сценарий 1: Анализ файлов
-1. **Загрузить файл:** `browser_evaluate` → `input[type=file].setInputFiles(путь)`
-   - GLM показывает preview: «filename.ext · X.X MB»
-   - ⚠️ `.java/.js/.py` → **переименовать в `.txt`** (GLM фильтрует расширения)
-   - ✅ PDF, DOCX, XLSX, PPTX, TXT, MD, изображения — поддерживаются
+1. **Загрузить файл (без кнопки "+"):** `input[type=file].setInputFiles(absPath)`
+   - GLM рендерит preview: «filename.ext · X.X MB»
+   - ⚠️ Исходный код: скопировать в `/tmp/name_uuid.txt` → загружать `.txt` (GLM блокирует `.java/.js/.ts/.kt/.go/.rs/.cpp`)
+   - ✅ Нативные: `.pdf`, `.docx`, `.xlsx`, `.pptx`, `.txt`, `.md`, `.py`, изображения
 2. textarea: «Проанализируй прикреплённый файл. Найди: 1) Баги 2) Уязвимости 3) Нарушения паттернов»
 3. waitForCompletion(480с, phase='agent') — Agent запускает tool calls для извлечения текста
 4. Прочитать: `.markdown-prose` последнего сообщения
@@ -209,9 +209,34 @@ return Array.from(blocks).map(b => ({
 
 ## 📎 Файлы
 
-**GLM/Qwen:** Upload через UI (кнопка "+" → Upload)
-**DeepSeek:** `input[type=file]` + DataTransfer API через `browser_evaluate`
-**Поддерживаемые форматы:** .pdf, .docx, .xlsx, .pptx, .txt, .md, .py, изображения
+### Метод 1: Прямая загрузка (без кнопки "+") — рекомендуется
+```javascript
+// browser_evaluate или Playwright setInputFiles — напрямую в hidden input
+const fileInput = page.locator('input[type="file"]');
+await fileInput.setInputFiles('C:\\path\\to\\file.pdf');
+// GLM рендерит preview: «filename.ext · X.X MB»
+```
+
+### Метод 2: Через UI (кнопка "+")
+1. `browser_click` "+" → "Upload" → file chooser
+
+### Автоконвертация исходного кода
+⚠️ GLM **фильтрует** расширения исходного кода → **переименовать в `.txt`** перед загрузкой:
+- Блокируются: `.java`, `.js`, `.ts`, `.kt`, `.scala`, `.go`, `.rs`, `.cpp`, `.c`, `.cs`, `.rb`, `.php`, `.swift`
+- VeAI: `copy file → /tmp/original_name_uuid.txt → setInputFiles(/tmp/...txt)`
+
+### Нативные форматы (загружать как есть)
+| Провайдер | Форматы |
+|-----------|--------|
+| **GLM** | `.pdf`, `.docx`, `.doc`, `.xls`, `.xlsx`, `.ppt`, `.pptx`, `.txt`, `.md`, `.py`, `.bmp`, `.gif`, `.mp4` |
+| **Qwen** | `.pdf`, `.docx`, `.xlsx`, `.pptx`, `.txt`, `.md`, изображения |
+| **DeepSeek** | `.pdf`, `.docx`, `.txt`, `.md`, изображения (DataTransfer API) |
+
+### Удаление файла из превью
+```javascript
+// Кнопка X на файле (invisible до hover)
+await page.locator('button[class*="invisible"]').first().click();
+```
 
 ---
 
