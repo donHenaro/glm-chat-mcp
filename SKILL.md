@@ -160,18 +160,17 @@ return { thought: thought.slice(0,200), tools: toolCalls.length, textLen: mainTe
 ### Сценарий 2: Генерация и извлечение кода / контента
 1. textarea: «Создай [описание]. Покажи весь код/результат прямо в чате.» → Enter
 2. waitForCompletion(300с)
-3. **extractCodeBlocks():**
+3. **Прочитать ответ** — GLM НЕ использует `<pre><code>`, всё в plain text:
 ```javascript
-const blocks = document.querySelectorAll('pre code, [class*="code-block"] pre');
-return Array.from(blocks).map(b => ({
-  language: b.className.match(/language-(\w+)/)?.[1] || 'unknown',
-  code: b.textContent || ''
-}));
+// browser_evaluate — универсальное чтение ответа
+const prose = document.querySelectorAll('.markdown-prose');
+const text = prose[prose.length - 1]?.innerText || '';
+const clean = text.replace(/^Thought Process\n/, '').trim();
+return clean;
 ```
-4. **Или полный текст:** `.markdown-prose[last]` → `innerText` (для markdown-презентаций, отчётов)
-5. VeAI: для каждого блока → `write_file(target_path, code)`
+4. VeAI: `write_file(target_path, clean)` — сохранить текст как файл
 
-**Протестировано:** PDF анализ → follow-up «создай презентацию» → 5 слайдов markdown (мультитурн!)
+**Протестировано:** PDF → follow-up «создай презентацию» → 5 слайдов markdown (мультитурн!)
 
 ### Сценарий 3: Редактирование репозитория
 1. textarea: «В репозитории [путь]: 1) Найди баги 2) Предложи исправления 3) Покажи diff. Показывай ход работы.»
@@ -194,20 +193,22 @@ return Array.from(blocks).map(b => ({
 4. `write_file('telegram_bot.py', code)` → `run_command python telegram_bot.py`
 
 ### Сценарий 6: Получение файлов от GLM
-GLM Agent Mode генерирует файлы (sandbox → PolarFS). Два способа:
 
-**Метод A: Download кнопка (Agent Mode)** ✅ Протестировано
-1. Промпт: «Создай файл X с данными Y. Сохрани как filename.ext»
-2. GLM Agent: создаёт файл → рендерит `button[title="Download file"]` (скрытая!)
-3. Показать кнопку: `parent.querySelector('.hidden')?.classList.replace('hidden', 'flex')`
+**Рекомендация GLM:** «Выводи содержимое прямо в чат, я сам сохраню» — самый простой способ.
+
+**Метод A: Текст из чата (рекомендуется)** ✅ Протестировано
+1. Промпт: «Выведи содержимое файла прямо в чат. Укажи имя файла как `// filename='name.ext'`»
+2. GLM выводит код/данные как plain text в `.markdown-prose`
+3. `browser_evaluate`: прочитать `innerText`, убрать `Thought Process\n`, сохранить через `write_file()`
+⚠️ GLM **НЕ рендерит `<pre><code>`** — всё в plain text! `querySelectorAll('pre code')` → 0 результатов
+
+**Метод B: Download кнопка (Agent Mode)** ✅ Протестировано
+1. Промпт: «Сохрани как filename.ext»
+2. GLM Agent: создаёт файл → `button[title="Download file"]` (скрытая, `hidden group-hover/item:flex`)
+3. Показать: `parent.querySelector('.hidden')?.classList.replace('hidden', 'flex')`
 4. Playwright: `waitForEvent('download')` → `click()` → `download.saveAs(path)`
-5. **Протестировано:** Agent → weather.csv → Download → `downloads/weather.csv` ✅
 
-**Метод B: extractCodeBlocks() (Chat Mode)** — надёжный fallback
-- Промпт: «Покажи весь код прямо в чате, не создавай файл»
-- `pre code` → `write_file()` — работает всегда, не зависит от Agent Mode
-
-**Ограничения:** sandbox (нет ФС), нет git, нет прямого HTTP, таймаут ~5 мин, beforeunload
+**Ограничения:** нет файлового сервера/URL, sandbox, нет git, нет HTTP, таймаут ~5 мин
 
 ---
 
