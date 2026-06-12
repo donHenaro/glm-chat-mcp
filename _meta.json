@@ -77,16 +77,16 @@
       "spinnerIndicator": "[class*='spinner']"
     },
     "qwen": {
-      "chatInput": "#chat-input",
+      "chatInput": "textarea.message-input-textarea",
       "thinkingIndicator": "[class*='thinking']",
       "copyButton": "button:has-text('Copy')",
-      "responseText": ".markdown-prose"
+      "responseText": "[class*='message-content']"
     },
     "deepseek": {
       "chatInput": "textarea",
       "thinkingIndicator": "[class*='thinking']",
       "copyButton": "button:has-text('Copy')",
-      "responseText": "#root"
+      "responseText": ".ds-markdown"
     }
   },
   "fileTransfer": {

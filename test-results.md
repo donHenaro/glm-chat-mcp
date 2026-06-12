@@ -74,3 +74,35 @@ const actionBtns = Array.from(btns).filter(b => b.className.includes('visible') 
 4. **Убрать `.chat-assistant`** — не существует в DOM
 5. **Использовать `[class*="thinking"]`** вместо `.thinking-chain-container`
 6. **Использовать `[class*="tool-call"]`** вместо `.tool-call-item`
+
+---
+
+## Тест 9: Параллельные консультации (Multi-Provider)
+
+**Вопрос:** Какой подход к обработке ошибок в микросервисной архитектуре Spring Boot?
+
+### Результаты отправки:
+| Провайдер | Input селектор | Отправлено |
+|-----------|---------------|:----------:|
+| GLM | `#chat-input` | ✅ |
+| DeepSeek | `textarea` | ✅ |
+| Qwen | `textarea.message-input-textarea` | ✅ |
+
+### Результаты чтения:
+| Провайдер | Ответ селектор | Уверенность | Подход |
+|-----------|---------------|-------------|--------|
+| GLM | `.markdown-prose[last]` | 9/10 | Многоуровневая + @ControllerAdvice + ApiError (кастомный) |
+| DeepSeek | `.ds-markdown[last]` | 95% | RFC 7807 + @ControllerAdvice + ErrorResponse |
+| Qwen | `[class*="message-content"][last]` | 95% | RFC 9457 (ProblemDetail Spring 3 нативно) + 5 уровней |
+
+### Консенсус:
+- ✅ Все 3 согласны: @ControllerAdvice + стандартизированный формат ошибок
+- ⚠️ Разногласие: GLM → кастомный DTO, Qwen+DeepSeek → RFC 7807/9457
+- 🏆 Qwen даёт самое современное решение (Spring 3 нативный ProblemDetail)
+
+### Селекторы открытые:
+| Провайдер | Chat Input | Response Text |
+|-----------|-----------|---------------|
+| GLM | `#chat-input` | `.markdown-prose` |
+| Qwen | `textarea.message-input-textarea` | `[class*="message-content"]` |
+| DeepSeek | `textarea` | `.ds-markdown` |
