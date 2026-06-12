@@ -114,10 +114,11 @@ const tokens = await (async () => {
 
 ## ⚡ API-режим: три стратегии доступа
 
-### Стратегия A: SSE-перехват (рекомендуемая для GLM)
+### Стратегия A: SSE-перехват (рекомендуемая для GLM и DeepSeek)
 
-GLM использует **Svelte + встроенный SHA-256 signature** — подделать подпись сложно.
-Вместо этого агент **отправляет через UI** (textarea + Enter), но **перехватывает SSE-ответ**.
+GLM использует **SHA-256 X-Signature**, а DeepSeek — **Proof-of-Work challenge**.
+Подделать оба механизма сложно. Вместо этого агент **отправляет через UI** (textarea + Enter),
+но **перехватывает SSE-ответ** через patched fetch.
 
 **Шаг 1:** Установить перехватчик SSE (один раз при старте сессии):
 ```javascript
@@ -182,9 +183,9 @@ const isDone = chunks.some(c => c.includes('"phase":"done"'));
 return { fullText, isDone };
 ```
 
-### Стратегия B: Прямой API-запрос (для Qwen и DeepSeek)
+### Стратегия B: Прямой API-запрос (для Qwen)
 
-Qwen и DeepSeek **не используют signature** — можно делать прямые fetch-запросы.
+Qwen **не использует signature или PoW** — можно делать прямые fetch-запросы.
 
 ---
 
@@ -243,19 +244,23 @@ Body: {"model":"qwen-max-latest","messages":[...],"stream":true,"chat_id":"<uuid
 
 ---
 
-### DeepSeek API — прямой запрос
+### DeepSeek API — техническая справка
 
-**Endpoint:** `POST https://chat.deepseek.com/api/v0/chat/completions`
+**Реальный endpoint:** `POST /api/v0/chat/completion`
+**⚠️ Proof-of-Work!** Перед каждым запросом:
+1. `POST /api/v0/chat/create_pow_challenge` — получить challenge
+2. Решить PoW (SHA-256 hashcash) в браузере
+3. `POST /api/v0/chat/completion` — с решённым PoW в заголовке
 
-**Обязательные заголовки:**
+**Auth:** `Bearer <userToken>` (из localStorage.userToken.value)
+
+⚠️ **НЕ пытаться подделать PoW** — используй Стратегию A (SSE-перехват)
+
+**SSE формат:** OpenAI-совместимый:
 ```
-Content-Type: application/json
-Authorization: Bearer <token>
-```
-
-**Payload:**
-```json
-{"model":"deepseek-chat","messages":[{"role":"user","content":"Hello"}],"stream":true}
+data: {"choices":[{"delta":{"content":"Текст"}}]}
+data: {"choices":[{"delta":{"reasoning_content":"Думаем..."}}]}  ← R1
+data: [DONE]
 ```
 
 **Режимы:**
@@ -264,7 +269,7 @@ Authorization: Bearer <token>
 | Обычный | `model:"deepseek-chat"` |
 | Deep Think (R1) | `model:"deepseek-reasoner"` → `reasoning_content` в delta |
 
-⚠️ **КРИТИЧЕСКОЕ DeepSeek правило:** `reasoning_content` **обязателен** (даже пустой) в messages ассистента при tool_calls — иначе HTTP 400!
+⚠️ **КРИТИЧЕСКОЕ:** `reasoning_content` **обязателен** (даже пустой) в messages ассистента при tool_calls — иначе HTTP 400!
 
 ---
 
@@ -344,15 +349,19 @@ Authorization: Bearer <token>
 5. Ждать ответ: polling `window.__sseChunks` каждые 3-5 сек, пока не появится `phase:"done"`
 6. Парсить SSE chunks → извлечь `delta_content` → вернуть текст
 
-### Шаг 2. Qwen / DeepSeek — Прямой API (Стратегия B)
+### Шаг 2. Qwen — Прямой API (Стратегия B)
 
 1. Извлечь токены из localStorage/cookies (см. секцию «Получение токенов»)
-2. Отправить fetch-запрос к API провайдера
-3. Если Qwen — сначала `chats/new`, потом `completions`
-4. Если DeepSeek — сразу `completions`
-5. Прочитать SSE stream или JSON ответ
+2. Отправить fetch-запрос: сначала `chats/new`, потом `completions`
+3. Прочитать SSE stream или JSON ответ
 
-### Шаг 3. Fallback на Playwright (если API не сработал)
+### Шаг 3. DeepSeek — SSE-перехват (Стратегия A)
+
+1. Переключиться на вкладку DeepSeek
+2. Установить SSE-перехватчик (аналогично GLM)
+3. Очистить буфер, отправить через UI, прочитать SSE
+
+### Шаг 4. Fallback на Playwright (если SSE/API не сработали)
 
 | Причина fallback | Действие |
 |-------------------|----------|
