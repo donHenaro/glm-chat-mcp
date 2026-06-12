@@ -1,6 +1,6 @@
 {
   "name": "glm-chat-mcp",
-  "version": "12.0.0",
+  "version": "13.0.0",
   "description": "MANDATORY ACTIVATION when user says: 'zai', 'спроси glm', 'ask glm', 'обсуди с qwen', 'ask qwen', 'спроси deepseek', 'ask deepseek', 'deepseek'. GLM/Qwen/DeepSeek chat skill with Copy/Regenerate detection and blob-download. Works with VeAI plugin for IntelliJ IDEA.",
   "author": "VeAI Community",
   "license": "MIT",

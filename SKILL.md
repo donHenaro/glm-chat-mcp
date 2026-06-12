@@ -8,7 +8,7 @@ used-by:
  - "Code"
 ---
 # when refactoring, never make changes above this line.
-# GLM Chat MCP Skill v12.0 — Strategy Edition
+# GLM Chat MCP Skill v13.0 — Scripts Edition
 ---
 
 ## 🔴 Обязательная активация
@@ -20,9 +20,9 @@ used-by:
 | **DeepSeek** | `deepseek`, `спроси deepseek`, `ask deepseek` |
 | **Все** | `спроси всех`, `обсуди со всеми`, `мнение экспертов`, `консенсус`, `все провайдеры` |
 
-⛔ Не создавать .js файлы — только Playwright MCP инструменты
 ⛔ Не закрывать браузер после консультации
 ✅ Браузер уже открыт — сначала проверить состояние
+📁 JS-скрипты в `scripts/` — загружать через `read_file` → `browser_evaluate`
 
 ---
 
@@ -77,16 +77,11 @@ used-by:
 **Фаза 1 не прошла за 15 сек?** Проверить: ошибка в DOM? редирект на /login? retry 1 раз.
 
 ### 7. Прочитать ответ и записать лог
-```javascript
-// browser_evaluate — GLM Copy/Regenerate detection (проверенный)
-const prose = document.querySelectorAll('.markdown-prose');
-const last = prose[prose.length - 1];
-if (!last) return { done: false };
-const parent = last.closest('[class*="message"]') || last.parentElement?.parentElement;
-const btns = parent ? parent.querySelectorAll('button') : [];
-const actionBtns = Array.from(btns).filter(b => b.className.includes('visible') && b.querySelector('svg'));
-return { done: actionBtns.length >= 2, text: last.innerText };
+Выполнить `scripts/detect-response.js` через `browser_evaluate`:
 ```
+read_file('scripts/detect-response.js') → browser_evaluate(isGLMResponseDone)
+```
+Вернёт: `{ done: true/false, textLen, text, spinner }`
 
 ---
 
@@ -114,18 +109,9 @@ return { done: actionBtns.length >= 2, text: last.innerText };
 | Готово | **2 SVG-кнопки** в `.markdown-prose` parent: кнопка[0]=Copy, кнопка[1]=Regenerate | `button:has-text("Copy")` | `button:has-text("Copy")` |
 | Ошибка | красный toast/alert | текст в сообщении | красный баннер |
 
-**GLM детектор готовности (проверенный):**
-```javascript
-// browser_evaluate — GLM Copy/Regenerate detection
-const prose = document.querySelectorAll('.markdown-prose');
-const last = prose[prose.length - 1];
-if (!last) return { done: false };
-const parent = last.closest('[class*="message"]') || last.parentElement?.parentElement;
-const btns = parent ? parent.querySelectorAll('button') : [];
-// Кнопки Copy/Regenerate = SVG-иконки, без текста, видимые
-const actionBtns = Array.from(btns).filter(b => b.className.includes('visible') && b.querySelector('svg'));
-return { done: actionBtns.length >= 2, btnCount: actionBtns.length, textLen: last.innerText.length };
-```
+**GLM детектор готовности:**
+→ `scripts/detect-response.js` → `isGLMResponseDone()`
+→ Fallback-цепочка: `.markdown-prose` → `[class*="prose"]` → `[data-message-role="assistant"]`
 
 ### Прогресс-модель (5 фаз ожидания)
 
@@ -162,18 +148,8 @@ return { done: actionBtns.length >= 2, btnCount: actionBtns.length, textLen: las
 | Всё что требует действий | Agent Mode | 300-480с |
 
 ### Прогресс-мониторинг (читать ход Agent Mode)
-```javascript
-// browser_evaluate — понимать что происходит
-const thought = document.querySelector('[class*="thinking"]')?.innerText || '';
-const toolCalls = document.querySelectorAll('[class*="tool-call"]');
-const prose = document.querySelectorAll('.markdown-prose');
-const mainText = prose[prose.length - 1]?.innerText || '';
-const parent = prose[prose.length-1]?.closest('[class*="message"]') || prose[prose.length-1]?.parentElement?.parentElement;
-const btns = parent ? parent.querySelectorAll('button') : [];
-const actionBtns = Array.from(btns).filter(b => b.className.includes('visible') && b.querySelector('svg'));
-const spinner = !!document.querySelector('[class*="spinner"]');
-return { thought: thought.slice(0,200), tools: toolCalls.length, textLen: mainText.length, done: actionBtns.length >= 2, spinner };
-```
+→ `scripts/progress-monitor.js` → `monitorProgress('glm')`
+Вернёт: `{ thought, tools, textLen, mainText, done, spinner }`
 
 ### Сценарий 1: Анализ файлов
 1. **Загрузить файл (без кнопки "+"):** `input[type=file].setInputFiles(absPath)`
@@ -190,15 +166,8 @@ return { thought: thought.slice(0,200), tools: toolCalls.length, textLen: mainTe
 ### Сценарий 2: Генерация и извлечение кода / контента
 1. textarea: «Создай [описание]. Покажи весь код/результат прямо в чате.» → Enter
 2. waitForCompletion(300с)
-3. **Прочитать ответ** — GLM НЕ использует `<pre><code>`, всё в plain text:
-```javascript
-// browser_evaluate — универсальное чтение ответа
-const prose = document.querySelectorAll('.markdown-prose');
-const text = prose[prose.length - 1]?.innerText || '';
-const clean = text.replace(/^Thought Process\n/, '').trim();
-return clean;
-```
-4. VeAI: `write_file(target_path, clean)` — сохранить текст как файл
+3. **Прочитать ответ** — через `scripts/extract-text.js` → `extractLastResponse('glm')`
+4. VeAI: `write_file(target_path, result.text)` — сохранить текст как файл
 
 **Протестировано:** PDF → follow-up «создай презентацию» → 5 слайдов markdown (мультитурн!)
 
@@ -225,30 +194,12 @@ return clean;
 ### Сценарий 6: Получение файлов от GLM
 
 **Метод A: Blob-перехват (рекомендуется)** ✅ Протестировано
-GLM при клике Download создаёт blob через `URL.createObjectURL()` — перехватываем:
-```javascript
-// browser_evaluate — перехват blob + клик Download
-const result = await page.evaluate(() => {
-  return new Promise((resolve) => {
-    const orig = URL.createObjectURL;
-    URL.createObjectURL = function(blob) {
-      const blobUrl = orig.call(URL, blob);
-      const reader = new FileReader();
-      reader.onload = () => {
-        const base64 = reader.result.split(',')[1];
-        resolve({ success: true, type: blob.type, size: blob.size, content: atob(base64) });
-      };
-      reader.readAsDataURL(blob);
-      return blobUrl;
-    };
-    setTimeout(() => {
-      document.querySelector('button[title="Download file"]')?.click();
-      setTimeout(() => resolve({ error: 'timeout' }), 5000);
-    }, 100);
-  });
-});
-// result.content = декодированное содержимое файла → write_file()
-```
+→ `scripts/blob-download.js` → `blobDownload()`
+
+Перехватывает `URL.createObjectURL` при клике Download, читает blob через FileReader.
+Для текстовых файлов: `readAsDataURL` → `atob()` → содержимое.
+Для бинарных: `readAsArrayBuffer` → `Uint8Array` → `btoa()` → base64.
+
 **Протестировано:** Agent → result.json → blob-перехват → `{"status":"ok","count":42}` ✅
 
 **Метод B: Текст из чата (fallback)**
@@ -278,43 +229,16 @@ const result = await page.evaluate(() => {
 По умолчанию: GLM + Qwen + DeepSeek. Можно указать подмножество: `спроси glm и qwen`
 
 **Шаг 2. Подготовить вкладки**
-```javascript
-// browser_evaluate — проверить/открыть вкладки
-const tabs = await page.context().pages();
-const providers = {
-  glm: tabs.find(t => t.url().includes('chat.z.ai')),
-  qwen: tabs.find(t => t.url().includes('chat.qwen.ai')),
-  deepseek: tabs.find(t => t.url().includes('chat.deepseek.com'))
-};
-// Если вкладки нет — открыть: await page.context().newPage(url)
-```
+Проверить/открыть по вкладке на провайдера. См. селекторы в таблице ниже.
 
 **Шаг 3. Отправить вопрос параллельно**
-Для каждого провайдера: переключить вкладку → вставить текст в textarea → Enter
-```javascript
-// Отправка на каждую вкладку последовательно (Playwright однопоточный)
-for (const [name, tab] of Object.entries(providers)) {
-  await tab.bringToFront();
-  const input = await tab.$('#chat-input') || await tab.$('textarea');
-  if (input) { await input.fill(question); await input.press('Enter'); }
-}
-```
+→ `scripts/multi-provider.js` → `dispatchToAll(providers, question)`
+⚠️ Отправлять БЫСТРО (без await генерации) — провайдеры генерируют параллельно!
+Минимум 2 сек между отправками (rate limiting).
 
 **Шаг 4. Собрать ответы**
-Опросить каждую вкладку с детектором готовности:
-```javascript
-// Сбор ответов — опрашивать по кругу
-const answers = {};
-for (const [name, tab] of Object.entries(providers)) {
-  await tab.bringToFront();
-  // Использовать детектор по провайдеру (см. Response Detection)
-  const prose = await tab.evaluate(() => {
-    const els = document.querySelectorAll('.markdown-prose');
-    return els[els.length - 1]?.innerText || '';
-  });
-  answers[name] = prose;
-}
-```
+→ `scripts/multi-provider.js` → `collectResponses(providers)`
+Или: `scripts/detect-response.js` → `readResponse(provider)` для каждого
 
 **Шаг 5. Критический анализ VeAI**
 VeAI — **оркестратор дискуссии**:
@@ -344,15 +268,7 @@ VeAI — **оркестратор дискуссии**:
 ```
 
 ### Follow-up для дискуссии
-```
-[Мульти-консультация — Раунд N]
-Другие эксперты ответили:
-- GLM: [ключевое]
-- Qwen: [ключевое]
-- DeepSeek: [ключевое]
-Разногласия: [описание]
-Прокомментируй позицию других. Изменишь ли своё мнение?
-```
+→ `scripts/multi-provider.js` → `formatMultiPrompt(question, round, otherAnswers)`
 
 ### Таймауты для параллельного режима
 | Кол-во провайдеров | Таймаут на раунд | Макс раундов |
@@ -366,12 +282,7 @@ VeAI — **оркестратор дискуссии**:
 ## 📎 Файлы
 
 ### Метод 1: Прямая загрузка (без кнопки "+") — рекомендуется
-```javascript
-// browser_evaluate или Playwright setInputFiles — напрямую в hidden input
-const fileInput = page.locator('input[type="file"]');
-await fileInput.setInputFiles('C:\\path\\to\\file.pdf');
-// GLM рендерит preview: «filename.ext · X.X MB»
-```
+`page.locator('input[type="file"]').setInputFiles(absPath)` — GLM рендерит preview
 
 ### Метод 2: Через UI (кнопка "+")
 1. `browser_click` "+" → "Upload" → file chooser
@@ -389,10 +300,7 @@ await fileInput.setInputFiles('C:\\path\\to\\file.pdf');
 | **DeepSeek** | `.pdf`, `.docx`, `.txt`, `.md`, изображения (DataTransfer API) |
 
 ### Удаление файла из превью
-```javascript
-// Кнопка X на файле (invisible до hover)
-await page.locator('button[class*="invisible"]').first().click();
-```
+`page.locator('button[class*="invisible"]').first().click()`
 
 ---
 
@@ -520,37 +428,19 @@ Caused by: java.net.ConnectException: Connection refused
 ## 🛡️ Production Readiness (по результатам мульти-консультации)
 
 ### Startup Health-Check
-При инициализации скилла — проверить все селекторы:
-```javascript
-// browser_evaluate — health check
-const checks = {
-  glm: !!document.querySelector('.markdown-prose'),
-  qwen: !!document.querySelector('[class*="message-content"]'),
-  deepseek: !!document.querySelector('.ds-markdown')
-};
-// Если селектор не найден → "Selector outdated for Provider X"
-```
+→ `scripts/detect-response.js` → `healthCheck()`
+Проверяет все селекторы при инициализации. Если селектор не найден → "Selector outdated for Provider X"
 
 ### Anti-Bot защита
 - Использовать `playwright-extra` с плагином `stealth`
-- **НЕ** использовать `page.fill()` — использовать human-like typing:
-```javascript
-// Кастомная функция ввода с рандомными задержками
-async function humanType(input, text) {
-  for (const char of text) {
-    await input.type(char, { delay: 50 + Math.random() * 100 });
-  }
-}
-```
+- **НЕ** использовать `page.fill()` — использовать human-like typing (50-150мс задержки)
 - Рандомные паузы между запросами (2-5 сек)
 
 ### Multi-tier Locators (fallback-цепочка)
-Для каждого элемента — массив локаторов по приоритету:
-```
-GLM response: ['.markdown-prose', '[class*="prose"]', '[role="article"]']
-Qwen response: ['[class*="message-content"]', '.markdown-body', '[role="article"]']
-DeepSeek response: ['.ds-markdown', '[class*="markdown"]', '[role="article"]']
-```
+Реализовано в `scripts/detect-response.js` → STRATEGIES:
+- GLM: `.markdown-prose` → `[class*="prose"]` → `[data-message-role="assistant"]`
+- Qwen: `[class*="message-content"]` → `.markdown-body` → `[role="article"]`
+- DeepSeek: `.ds-markdown` → `[class*="markdown"]` → `[role="article"]`
 
 ### Resource Management
 - 3 персистентных контекста (по одному на провайдера) — НЕ создавать новый на запрос
@@ -580,9 +470,21 @@ DeepSeek response: ['.ds-markdown', '[class*="markdown"]', '[role="article"]']
 ```
 glm-chat-mcp/                     ← https://github.com/donHenaro/glm-chat-mcp
 ├── SKILL.md                      ← инструкции агента (этот файл)
-├── reference.md                  ← техническая справка API
-└── log/                          ← логи чатов
+├── _meta.json                    ← машиночитаемый конфиг (единый источник версий)
+├── reference.md                  ← техническая справка API провайдеров
+├── scripts/                      ← JS-скрипты для browser_evaluate
+│   ├── detect-response.js        ← Response Detection + fallback-цепочка
+│   ├── extract-text.js           ← чтение ответов + контекстный checkpoint
+│   ├── blob-download.js          ← перехват blob (текст + бинарные файлы)
+│   ├── progress-monitor.js       ← мониторинг Agent Mode
+│   └── multi-provider.js         ← параллельный опрос + форматирование
+├── log/                          ← логи чатов
+└── test-results.md               ← результаты тестирования селекторов
 ```
+
+### Как использовать скрипты
+1. `read_file('scripts/<name>.js')` — прочитать содержимое
+2. `browser_evaluate(<function_body>)` — выполнить нужную функцию в контексте страницы
 
 ### Репозиторий: https://github.com/donHenaro/glm-chat-mcp.git
 
@@ -590,18 +492,20 @@ glm-chat-mcp/                     ← https://github.com/donHenaro/glm-chat-mcp
 
 ## 📋 Changelog
 
-### v10.0.0 (current) — Copy/Regenerate Detection + Compact
-
+### v13.0.0 (current) — Scripts Edition
 **Breaking changes:**
-- Response detection: bubble-reading → Copy/Regenerate buttons
-- Двухфазный детектор: Фаза 1 (Stop) → Фаза 2 (Copy/Regenerate stable 3 сек)
-- SSE-intercept вынесен в reference.md
-- SKILL.md сжат: 756 → 200 строк
+- Весь JS вынесен из SKILL.md в scripts/ (5 модулей)
+- Fallback-цепочки селекторов (multi-tier locators)
+- Blob-download: readAsArrayBuffer для бинарных файлов
+- SKILL.md сокращён: ~498 → ~400 строк
+- Версия: единый источник _meta.json.version
 
-### v9.2 — bubble-reading, Agent Mode docs
+### v12.0 — Strategy Edition
+- 5 паттернов промптов, контекстный checkpointing, оптимизация токенов
 
-### v9.0 — multiturn, files, Agent Mode, dead code cleanup (45 files removed)
+### v11.0 — Tested Edition
+- SVG-based detection, spinner, Agent Mode hang recovery
 
-### v8.0 — direct API access, no webchat2api dependency
+### v10.0 — Copy/Regenerate Detection + Compact
 
-### v7.0 — dual-mode architecture, DeepSeek provider
+### v9.0 — multiturn, files, Agent Mode, dead code cleanup
