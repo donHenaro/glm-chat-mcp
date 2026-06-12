@@ -153,7 +153,7 @@ Headers: Authorization: Bearer {WEBCHAT2API_KEY}
 2. Если `ok` → отправить запрос `POST /v1/chat/completions`
 3. Если ошибка/timeout → перейти к Playwright-режиму (Шаг 1b)
 
-**API-запрос:**
+**API-запрос (OpenAI-совместимый):**
 ```json
 {
   "model": "<модель провайдера>",
@@ -164,6 +164,15 @@ Headers: Authorization: Bearer {WEBCHAT2API_KEY}
   "stream": false
 }
 ```
+
+**⚠️ Qwen внутренний протокол (для webchat2api runtime):**
+Qwen использует двухэтапный процесс:
+1. `POST /api/v2/chats/new` → получить `chat_id`
+2. `POST /api/v2/chat/completions?chat_id=...` → SSE стрим
+
+Это обрабатывается внутри webchat2api Qwen provider — агент
+отправляет стандартный `/v1/chat/completions`, а провайдер
+сам создаёт чат и маршрутизирует запрос.
 
 **Маппинг моделей:**
 | Запрос | API модель |

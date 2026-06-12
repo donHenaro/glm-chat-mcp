@@ -22,39 +22,71 @@ from services.providers.qwen.models import is_qwen_search_model, is_qwen_reasoni
 # ── Qwen API Configuration ────────────────────────────────────────────
 
 QWEN_BASE_URL = "https://chat.qwen.ai"
-QWEN_CHAT_ENDPOINT = f"{QWEN_BASE_URL}/api/v1/chat/completions"
+QWEN_CREATE_CHAT_ENDPOINT = f"{QWEN_BASE_URL}/api/v2/chats/new"
+QWEN_CHAT_ENDPOINT = f"{QWEN_BASE_URL}/api/v2/chat/completions"
 
 # ── Request Building ──────────────────────────────────────────────────
 
 def _build_headers(access_token: str, csrf_token: str = "") -> dict[str, str]:
+    """Build HTTP headers for Qwen API request.
+
+    Qwen requires specific headers discovered via consultation:
+    - source: web
+    - Version: client version string
+    - bx-v: build version
+    - Origin + Referer for CORS
+    """
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
         "Accept": "text/event-stream",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "source": "web",
+        "Version": "0.1.13",
+        "bx-v": "2.5.31",
+        "Origin": QWEN_BASE_URL,
+        "Referer": f"{QWEN_BASE_URL}/c/guest",
     }
     if csrf_token:
         headers["X-CSRF-Token"] = csrf_token
     return headers
 
 
-def _build_payload(
+def _build_create_chat_payload(model: str) -> dict[str, Any]:
+    """Step 1: Create a new chat session.
+
+    Qwen requires a two-step process:
+    1. POST /api/v2/chats/new → get chat_id
+    2. POST /api/v2/chat/completions?chat_id=... → SSE stream
+    """
+    import time
+    return {
+        "title": "New Chat",
+        "models": [model],
+        "chat_mode": "local",
+        "chat_type": "t2i",
+        "timestamp": int(time.time() * 1000),
+    }
+
+
+def _build_completions_payload(
     messages: list[dict[str, Any]],
     model: str,
     spec: ModelSpec,
+    chat_id: str,
     stream: bool = True,
     enable_search: bool = False,
+    enable_thinking: bool = False,
 ) -> dict[str, Any]:
+    """Step 2: Send chat completion request with chat_id."""
     payload: dict[str, Any] = {
         "model": spec.upstream_id,
         "messages": messages,
         "stream": stream,
+        "chat_id": chat_id,
+        "web_search": is_qwen_search_model(spec) or enable_search,
+        "thinking": is_qwen_reasoning_model(spec) or enable_thinking,
     }
-
-    # Web search activation
-    if is_qwen_search_model(spec) or enable_search:
-        payload["extra"] = {"web_search": True}
-
     return payload
 
 
