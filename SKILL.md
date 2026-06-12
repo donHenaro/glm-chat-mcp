@@ -114,11 +114,13 @@ const tokens = await (async () => {
 
 ## ⚡ API-режим: три стратегии доступа
 
-### Стратегия A: SSE-перехват (рекомендуемая для GLM и DeepSeek)
+### Стратегия A: SSE-перехват (GLM) + DOM-чтение (DeepSeek)
 
-GLM использует **SHA-256 X-Signature**, а DeepSeek — **Proof-of-Work challenge**.
-Подделать оба механизма сложно. Вместо этого агент **отправляет через UI** (textarea + Enter),
-но **перехватывает SSE-ответ** через patched fetch.
+**GLM:** Использует SHA-256 X-Signature → SSE-перехват (отправка через UI, чтение через patched fetch)
+**DeepSeek:** Использует Proof-of-Work challenge → DOM-чтение (отправка через UI, чтение innerText из #root)
+
+Оба провайдера требуют отправку через UI (textarea + Enter), но чтение ответа
+можно ускорить: GLM — через SSE chunks, DeepSeek — через DOM innerText.
 
 **Шаг 1:** Установить перехватчик SSE (один раз при старте сессии):
 ```javascript
@@ -355,11 +357,13 @@ Authorization: Bearer <token>
 2. Отправить fetch-запрос: сначала `chats/new`, потом `completions`
 3. Прочитать SSE stream или JSON ответ
 
-### Шаг 3. DeepSeek — SSE-перехват (Стратегия A)
+### Шаг 3. DeepSeek — DOM-чтение (Стратегия A-variant)
 
 1. Переключиться на вкладку DeepSeek
-2. Установить SSE-перехватчик (аналогично GLM)
-3. Очистить буфер, отправить через UI, прочитать SSE
+2. Отправить сообщение через UI: textarea.fill(prompt) → Enter
+3. Ждать ответ: polling DOM каждые 3-5 сек
+4. Читать ответ: `document.querySelector('#root').innerText` — найти текст после вопроса
+5. Признак завершения: текст перестал меняться (2 polling-цикла подряд одинаковая длина)
 
 ### Шаг 4. Fallback на Playwright (если SSE/API не сработали)
 
