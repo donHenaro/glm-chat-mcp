@@ -1,7 +1,7 @@
 {
   "name": "glm-chat-mcp",
-  "version": "3.0.0",
-  "description": "🚨 MANDATORY ACTIVATION when user says: 'спроси glm', 'спроси у glm', 'ask glm', 'expert opinion', 'java эксперт'. AGENT DIALOGS with GLM like DeepSeek thinks: GLM analyzes → Agent clarifies → GLM improves → repeat until consensus. GLM is expert-consultant via browser automation. Agent MUST NOT analyze code before consulting GLM. Browser stays OPEN for dialog continuation.",
+  "version": "10.0.0",
+  "description": "MANDATORY ACTIVATION when user says: 'zai', 'спроси glm', 'ask glm', 'обсуди с qwen', 'ask qwen', 'спроси deepseek', 'ask deepseek', 'deepseek'. GLM/Qwen/DeepSeek chat skill with Copy/Regenerate detection. Works with VeAI plugin for IntelliJ IDEA.",
   "author": "VeAI Community",
   "license": "MIT",
   "keywords": [
@@ -83,7 +83,17 @@
     "spring эксперт",
     "spring expert",
     "spring консультация",
-    "spring consult"
+    "spring consult",
+    "qwen",
+    "спроси qwen",
+    "ask qwen",
+    "обсуди с qwen",
+    "consult qwen",
+    "deepseek",
+    "спроси deepseek",
+    "ask deepseek",
+    "обсуди с deepseek",
+    "consult deepseek"
   ],
   "workflow": {
     "principle": "GLM acts as Java/Spring expert with HIGHEST PRIORITY opinion",
@@ -103,29 +113,21 @@
     ]
   },
   "responseDetection": {
-    "method": "polling-with-stability",
-    "criteria": {
-      "stabilityThreshold": 3,
-      "minResponseLength": 100,
-      "thinkingFilter": true,
-      "structureCheck": true
-    },
-    "thinkingMarkers": [
-      "Thinking...",
-      "Reasoning...",
-      "Let me think",
-      "Analyze the Request:",
-      "Thought Process",
-      "Self-Correction"
-    ],
-    "structureMarkers": [
-      "numbered lists",
-      "bold headers",
-      "Вердикт:",
-      "Рекомендации:",
-      "Выводы:",
-      "code blocks"
-    ]
+    "method": "action-buttons-detection",
+    "primaryIndicator": "Copy/Regenerate buttons visible and stable for 3s",
+    "secondaryIndicator": "Stop button disappeared + thinking gone",
+    "fallbackMethod": "innerText stability 10s (only if buttons not found)",
+    "phases": {
+      "generationStart": "Stop button appears within 15s",
+      "generationComplete": "Copy/Regenerate stable for 3s",
+      "timeoutByMode": {
+        "chat": 60000,
+        "webSearch": 90000,
+        "deepThink": 120000,
+        "agent": 300000,
+        "agentDeepThink": 480000
+      }
+    }
   },
   "sessionManagement": {
     "keepBrowserOpen": true,
