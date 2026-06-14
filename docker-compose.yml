@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  glm-chat-bridge:
+    build: .
+    container_name: glm-chat-mcp
+    ports:
+      - "8102:8102"  # OpenAI API
+      - "5900:5900"  # VNC (optional)
+    environment:
+      - PORT=8102
+      - HEADLESS=true
+      - CACHE=true
+      - CACHE_TTL=300000
+      - API_KEYS=${API_KEYS:-}           # Comma-separated API keys
+      - RATE_LIMIT_MAX=30                # Requests per minute per key
+      - CLOAK=false                      # Enable CloakBrowser
+      - VNC_ENABLED=${VNC_ENABLED:-false} # Enable VNC for debugging
+      - CDP_URL=                         # Connect to external browser
+    restart: unless-stopped
+    shm_size: '2gb'    # Required for Chromium
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:8102/v1/status', r => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
