@@ -27,7 +27,24 @@
  */
 
 const express = require('express');
-const { chromium } = require('playwright');
+
+// === CloakBrowser mode ===
+// If CLOAK=true, use cloakbrowser (stealth Playwright replacement) instead of playwright
+// Pass CLOAK_HUMANIZE=true|false, CLOAK_PROXY=url, CLOAK_GEOIP=country
+let chromium;
+let usingCloak = false;
+if (process.env.CLOAK === 'true') {
+  try {
+    chromium = require('cloakbrowser').chromium;
+    usingCloak = true;
+    console.log('[bridge] ✓ CloakBrowser mode enabled (stealth)');
+  } catch {
+    console.warn('[bridge] ⚠ CLOAK=true but cloakbrowser not installed, falling back to playwright');
+    chromium = require('playwright').chromium;
+  }
+} else {
+  chromium = require('playwright').chromium;
+}
 
 // === Configuration ===
 const PORT = parseInt(process.env.PORT || process.argv.find(a => a.startsWith('--port='))?.split('=')[1] || '8102', 10);
@@ -42,13 +59,64 @@ const PROVIDERS = {
 };
 const DEFAULT_MODEL = 'glm-5.1';
 const TIMEOUT_MS = 300000; // 5 minutes max
+const CDP_DEFAULT_PORT = 9222;
+const SESSION_TTL_MS = 30 * 60 * 1000; // 30 min session TTL
 
 // === State ===
 let browser = null;
-let contexts = {}; // provider -> BrowserContext
+let contexts = {};   // provider -> BrowserContext
+let sessions = {};   // sessionId -> { page, provider, lastUsed, messages }
 
 const app = express();
 app.use(express.json());
+
+// === CDP Auto-Discovery ===
+async function discoverCDP() {
+  // Try common CDP endpoints to find existing Playwright browser
+  const endpoints = [
+    process.env.CDP_URL,
+    `http://localhost:${CDP_DEFAULT_PORT}`,
+    'http://127.0.0.1:9222',
+    'http://localhost:9223',
+  ].filter(Boolean);
+
+  for (const endpoint of endpoints) {
+    try {
+      const http = require('http');
+      const url = new URL('/json/version', endpoint);
+      const version = await new Promise((resolve, reject) => {
+        const req = http.get(url.toString(), { timeout: 2000 }, (res) => {
+          let data = '';
+          res.on('data', chunk => data += chunk);
+          res.on('end', () => { try { resolve(JSON.parse(data)); } catch { reject(new Error('Invalid JSON')); } });
+        });
+        req.on('error', reject);
+        req.on('timeout', () => { req.destroy(); reject(new Error('Timeout')); });
+      });
+      if (version.webSocketDebuggerUrl) {
+        console.log(`[bridge] Found CDP at ${endpoint}: ${version.Browser}`);
+        return { endpoint, wsUrl: version.webSocketDebuggerUrl, browser: version.Browser };
+      }
+    } catch { /* next endpoint */ }
+  }
+  return null;
+}
+
+// === Session Management ===
+function createSessionId() {
+  return `sess-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+}
+
+function cleanExpiredSessions() {
+  const now = Date.now();
+  for (const [id, sess] of Object.entries(sessions)) {
+    if (now - sess.lastUsed > SESSION_TTL_MS) {
+      console.log(`[bridge] Session expired: ${id}`);
+      sess.page?.close?.().catch(() => {});
+      delete sessions[id];
+    }
+  }
+}
 
 // === Health check ===
 app.get('/v1/models', (req, res) => {
@@ -76,6 +144,13 @@ app.post('/v1/chat/completions', async (req, res) => {
     return res.status(400).json({ error: { message: `Unknown model: ${model}. Available: ${Object.keys(PROVIDERS).join(', ')}`, type: 'invalid_request_error' } });
   }
 
+  // Session continuity: check if client sent session_id header
+  const sessionId = req.headers['x-session-id'] || null;
+  let session = sessionId ? sessions[sessionId] : null;
+
+  // Clean expired sessions
+  cleanExpiredSessions();
+
   // Extract the last user message
   const lastUserMsg = messages.filter(m => m.role === 'user').pop();
   if (!lastUserMsg) {
@@ -88,11 +163,26 @@ app.post('/v1/chat/completions', async (req, res) => {
   try {
     // Get or create browser context for this provider
     const context = await getOrCreateContext(provider);
-    const page = await context.newPage();
+
+    // Reuse session page if available
+    let page;
+    if (session?.page && !session.page.isClosed()) {
+      page = session.page;
+      session.lastUsed = Date.now();
+      console.log(`[bridge] Reusing session: ${sessionId}`);
+    } else {
+      page = await context.newPage();
+      const newSessionId = sessionId || createSessionId();
+      sessions[newSessionId] = { page, provider, lastUsed: Date.now(), messages: [] };
+      if (!res.headersSent) res.setHeader('X-Session-Id', newSessionId);
+    }
 
     try {
-      // Navigate to provider
-      await page.goto(provider.url, { timeout: 30000, waitUntil: 'domcontentloaded' });
+      // Navigate to provider (only if new page or not on chat URL)
+      const currentUrl = page.url();
+      if (!currentUrl.includes(new URL(provider.url).hostname)) {
+        await page.goto(provider.url, { timeout: 30000, waitUntil: 'domcontentloaded' });
+      }
       await page.waitForTimeout(2000);
 
       // Inject network hooks
@@ -234,7 +324,12 @@ app.post('/v1/chat/completions', async (req, res) => {
         });
       }
     } finally {
-      await page.close();
+      // Don't close page if session exists (reuse for conversation)
+      if (!session) {
+        // No session — close page after use
+        // But keep it alive for a few seconds in case client sends follow-up
+        setTimeout(() => page.close().catch(() => {}), 5000);
+      }
     }
   } catch (error) {
     console.error('[bridge] Error:', error.message);
@@ -246,24 +341,64 @@ app.post('/v1/chat/completions', async (req, res) => {
   }
 });
 
-// === Browser management ===
+// === CDP Auto-Discovery ===
+async function discoverCDP() {
+  const http = require('http');
+  const endpoints = [
+    process.env.CDP_URL,
+    'http://localhost:9222',
+    'http://127.0.0.1:9222',
+    'http://localhost:9223',
+  ].filter(Boolean);
+  for (const endpoint of endpoints) {
+    try {
+      const url = new URL('/json/version', endpoint);
+      const version = await new Promise((resolve, reject) => {
+        const req = http.get(url.toString(), { timeout: 2000 }, (res) => {
+          let data = '';
+          res.on('data', chunk => data += chunk);
+          res.on('end', () => { try { resolve(JSON.parse(data)); } catch { reject(new Error('Invalid JSON')); } });
+        });
+        req.on('error', reject);
+        req.on('timeout', () => { req.destroy(); reject(new Error('Timeout')); });
+      });
+      if (version.webSocketDebuggerUrl) {
+        console.log(`[bridge] Found CDP at ${endpoint}: ${version.Browser}`);
+        return { endpoint, wsUrl: version.webSocketDebuggerUrl, browser: version.Browser };
+      }
+    } catch { /* next */ }
+  }
+  return null;
+}
+
 // === Browser management ===
 async function getOrCreateContext(provider) {
   if (!browser) {
-    // Try to connect to existing browser via CDP (from MCP Playwright)
-    const cdpUrl = process.env.CDP_URL || 'http://localhost:9222';
-    try {
-      browser = await chromium.connectOverCDP(cdpUrl);
-      console.log(`[bridge] Connected to existing browser via CDP: ${cdpUrl}`);
-    } catch {
-      // Fallback: launch new browser
+    // Step 1: CDP auto-discovery
+    const cdp = await discoverCDP();
+    if (cdp) {
       try {
-        browser = await chromium.launch({ headless: HEADLESS });
-        console.log(`[bridge] Browser launched (headless=${HEADLESS})`);
+        browser = await chromium.connectOverCDP(cdp.wsUrl);
+        console.log(`[bridge] Connected via CDP: ${cdp.browser}`);
+      } catch (e) {
+        console.warn(`[bridge] CDP found but failed: ${e.message}`);
+      }
+    }
+    // Step 2: Launch if no CDP
+    if (!browser) {
+      try {
+        const launchOpts = { headless: HEADLESS };
+        if (usingCloak) {
+          if (process.env.CLOAK_HUMANIZE !== 'false') launchOpts.humanize = true;
+          if (process.env.CLOAK_GEOIP) launchOpts.geoip = process.env.CLOAK_GEOIP;
+        }
+        if (process.env.CLOAK_PROXY) launchOpts.proxy = { server: process.env.CLOAK_PROXY };
+        browser = await chromium.launch(launchOpts);
+        const mode = usingCloak ? 'CloakBrowser' : 'Playwright';
+        console.log(`[bridge] ${mode} launched (headless=${HEADLESS})`);
       } catch (launchErr) {
-        console.error(`[bridge] Failed to launch browser: ${launchErr.message}`);
-        console.error(`[bridge] TIP: Set CDP_URL env to connect to existing Playwright browser`);
-        console.error(`[bridge] Or run: npx playwright install chromium`);
+        console.error(`[bridge] Failed to launch: ${launchErr.message}`);
+        console.error(`[bridge] TIP: Set CDP_URL or run: npx playwright install chromium`);
         throw launchErr;
       }
     }
@@ -286,8 +421,33 @@ process.on('SIGINT', async () => {
 });
 
 // === Start ===
+// === Status endpoint ===
+app.get('/v1/status', (req, res) => {
+  res.json({
+    status: 'running',
+    version: '14.3.0',
+    browser: browser ? 'connected' : 'not started',
+    cloak: usingCloak,
+    activeSessions: Object.keys(sessions).length,
+    models: Object.keys(PROVIDERS),
+    uptime: process.uptime(),
+  });
+});
+
+// === Sessions endpoint ===
+app.get('/v1/sessions', (req, res) => {
+  const list = Object.entries(sessions).map(([id, s]) => ({
+    id,
+    provider: s.provider?.url,
+    age: Math.round((Date.now() - s.lastUsed) / 1000) + 's ago',
+    messages: s.messages?.length || 0,
+  }));
+  res.json({ sessions: list });
+});
+
 app.listen(PORT, () => {
   console.log(`[bridge] OpenAI-compatible API server running on http://localhost:${PORT}`);
   console.log(`[bridge] Models: ${Object.keys(PROVIDERS).join(', ')}`);
-  console.log(`[bridge] Endpoints: GET /v1/models, POST /v1/chat/completions`);
+  console.log(`[bridge] Endpoints: GET /v1/models, GET /v1/status, GET /v1/sessions, POST /v1/chat/completions`);
+  console.log(`[bridge] CloakBrowser: ${usingCloak ? 'ON' : 'OFF'} | Headless: ${HEADLESS}`);
 });

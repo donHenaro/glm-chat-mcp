@@ -629,7 +629,32 @@ spring.jpa.hibernate.ddl-auto=validate.
 
 ## 📋 Changelog
 
-### v14.2.0 (current) — Network Intelligence + AI Extract + OpenAI Bridge
+### v14.3.0 (current) — P2 Complete: CDP + CloakBrowser + WebSocket + Sessions
+**P2 полностью реализовано:**
+- 🆕 `server/cloak-browser-mcp.js` — CloakBrowser MCP server (stdio JSON-RPC)
+  - 6 tools: navigate, click, type, evaluate, snapshot, press_key
+  - Falls back to playwright if cloakbrowser not installed
+  - Env config: CLOAK_HUMANIZE, CLOAK_PROXY, CLOAK_GEOIP
+- 🆕 `server/package-cloak.json` — cloakbrowser + @anthropic-ai/sdk dependencies
+- 🆕 `scripts/cdp-intercept.js` — WebSocket interception + EventSource fallback
+  - Monkey-patches WebSocket for incoming/outgoing message capture
+  - `window.__wsBuffer.extractResponse()` for chat response extraction
+  - Supports SSE-over-WebSocket and JSON-over-WebSocket formats
+- `server/openai-bridge.js` v14.3:
+  - CDP auto-discovery (scans localhost:9222-9223 for existing Playwright)
+  - Session management: X-Session-Id header, 30-min TTL, page reuse
+  - New endpoints: GET /v1/status, GET /v1/sessions
+  - CloakBrowser mode: CLOAK=true env var
+  - Conversation context reuse (don't re-navigate if on same domain)
+
+**Протестировано:**
+- ✅ fetch-stream via tee() работает на свежей вкладке
+- ✅ Network detection быстрее DOM (phase=complete while DOM spinner)
+- ✅ OpenAI completion: {content:"Париж", reasoning_content:"...", finish_reason:"stop"}
+- ✅ /v1/models endpoint: 6 моделей
+- ✅ Full pipeline: HTTP request → GLM chat → SSE → network buffer → OpenAI format
+
+### v14.2.0 — Network Intelligence + AI Extract + OpenAI Bridge
 **P1 полностью реализовано:**
 - 🆕 `hooks-auto-init.js` — единая точка входа, auto-init hooks + trace + adapters
 - 🆕 `ai-extract.js` — AI-powered extract fallback (5 стратегий: network → selectors → roles → containers → longest-prose)
