@@ -19,11 +19,25 @@ GLM Chat MCP is a browser-automation skill for consulting GLM, Qwen, and DeepSee
 
 | Провайдер | Триггеры |
 |-----------|----------|
-| **GLM** | `zai`, `спроси glm`, `ask glm`, `реализуй`, `создай`, `агент`, `исследуй` |
+| **GLM** | `zai`, `спроси glm`, `ask glm`, `реализуй`, `создай`, `агент`, `исследуй`, `agent` |
 | **Qwen** | `qwen`, `спроси qwen`, `ask qwen`, `обсуди с qwen` |
 | **DeepSeek** | `deepseek`, `спроси deepseek`, `ask deepseek` |
 | **Kimi** | `kimi`, `спроси kimi`, `ask kimi` |
 | **Все** | `спроси всех`, `обсуди со всеми`, `мнение экспертов`, `консенсус`, `все провайдеры` |
+
+### Режимные триггеры (после активации провайдера)
+
+| Режим | Триггеры | Провайдер |
+|-------|----------|-----------|
+| **DeepThink** | `подумай глубоко`, `deep think`, `глубокое мышление` | GLM, Qwen, DeepSeek |
+| **Agent Mode** | `agent mode`, `агент режим`, `выполни` | GLM, Kimi |
+| **Web Search** | `поиск в интернете`, `web search`, `найди в сети` | GLM, DeepSeek, Qwen, Kimi(Claw) |
+| **Deep Research** | `глубокое исследование`, `deep research`, `исследуй тему` | Kimi |
+| **Agent Swarm** | `agent swarm`, `рой агентов`, `мультиагент` | Kimi |
+| **Slides/PPT** | `создай презентацию`, `make slides`, `ppt` | Kimi, GLM(AI PPT) |
+| **Websites** | `создай сайт`, `make website`, `html` | Kimi |
+| **Docs** | `анализ документа`, `проанализируй файл`, `docs` | Kimi |
+| **Sheets** | `создай таблицу`, `make spreadsheet`, `csv` | Kimi |
 
 ⛔ Не закрывать браузер после консультации
 ✅ Браузер уже открыт — сначала проверить состояние
@@ -31,15 +45,16 @@ GLM Chat MCP is a browser-automation skill for consulting GLM, Qwen, and DeepSee
 
 ---
 
-## 🔄 Workflow — 7 шагов
+## 🔄 Workflow — 8 шагов
 
 1. **Определить провайдера и режим** — Триггер → провайдер. Agent Mode триггеры: `найди`, `проанализируй`, `выполни код`, `исследуй`, `agent`
 2. **Проверить лог, найти существующий чат** — `log/YYYY-MM-DD/<provider>-chat-log-YYYY-MM-DD.md`
-3. **Переключиться на вкладку провайдера** — GLM: `chat.z.ai`, Qwen: `chat.qwen.ai`, DeepSeek: `chat.deepseek.com`
-4. **Выбрать режим** — `browser_snapshot` → кнопка режима → `browser_click`
-5. **Отправить сообщение** — `browser_click` textarea → `browser_type` → `browser_press_key` Enter
-6. **Ожидание ответа** — Фаза 1: spinner/Stop (0-15с). Фаза 2: 2+ SVG-кнопки стабильны 3 сек
-7. **Прочитать ответ** — `browser_evaluate(readResponse('glm'))` → `{ done, textLen, text, source, provider }`
+3. **Переключиться на вкладку провайдера** — GLM: `chat.z.ai`, Qwen: `chat.qwen.ai`, DeepSeek: `chat.deepseek.com`, Kimi: `kimi.com`
+4. **Выбрать режим** — `browser_evaluate('window.__modeSwitch.switch("deepThink")')` или `browser_evaluate(filename='mode-switcher.js')` → `window.__modeSwitch.switch("agentSwarm")`
+5. **Загрузить файл (если нужно)** — `page.$('input[type="file"]').setInputFiles(path)` (GLM/Qwen/DeepSeek)
+6. **Отправить сообщение** — `browser_click` textarea → `browser_type` → `browser_press_key` Enter
+7. **Ожидание ответа** — Фаза 1: spinner/Stop (0-15с). Фаза 2: 2+ SVG-кнопки стабильны 3 сек
+8. **Прочитать ответ** — `browser_evaluate('window.__adapter.read()')` → `{ done, textLen, text, source, provider }`
 
 ---
 
@@ -59,6 +74,7 @@ glm-chat-mcp/
 │   ├── ai-extract.js        ← AI-powered extract fallback — 5 стратегий
 │   ├── debug-trace.js       ← Debug tracing — логирование + ошибки + таймеры
 │   ├── multi-collect.js     ← Сбор ответов multi-provider
+│   ├── mode-switcher.js     ← Универсальный переключатель режимов (DeepThink/Agent/Search/Slides/...)
 │   ├── blob-download.js     ← Blob-перехват (текст + бинарные)
 │   └── progress-monitor.js  ← Мониторинг Agent Mode
 ├── server/                  ← OpenAI-compatible HTTP bridge + CloakBrowser MCP
@@ -71,6 +87,7 @@ glm-chat-mcp/
 │   ├── ARCHITECTURE.md      ← Архитектура: Network Hooks, Adapters, Bridge, Sessions
 │   ├── API.md               ← OpenAI Bridge API reference
 │   ├── reference.md         ← Техническая справка API провайдеров
+│   ├── kimi-features-reference.md ← Kimi: 9 бесплатных функций (от консультации с Kimi)
 │   ├── history/             ← История разработки
 │   └── plans/               ← Планы развития
 ├── Dockerfile               ← Docker image
@@ -122,7 +139,16 @@ glm-chat-mcp/
 
 ## 📝 Changelog
 
-### v15.2.0 (current) — Advanced Mode Testing: DeepThink ✅ Agent ✅ Files ✅
+### v15.3.0 (current) — Mode Switcher + Kimi Features Integration
+
+- 🆕 `scripts/mode-switcher.js` — универсальный переключатель режимов всех провайдеров
+- 🆕 Режимные триггеры в SKILL.md: DeepThink, Agent, Search, Deep Research, Agent Swarm, Slides, Websites, Docs, Sheets
+- 🆕 Workflow обновлён: 7→8 шагов (добавлен режим + файл upload)
+- 🆕 `docs/reference/kimi-features-reference.md` — полный обзор 9 функций Kimi
+- 🆕 Kimi: Deep Research, Agent Swarm, Slides, Websites, Docs, Sheets, Code, Claw — все через sidebar
+- 🆕 DeepSeek: Быстрый/Глубокое мышление/Умный поиск — через клик по кнопке
+
+### v15.2.0 — Advanced Mode Testing: DeepThink ✅ Agent ✅ Files ✅
 
 - 🆕 GLM File Upload: `setInputFiles()` на скрытый input работает — прочитал файл ✅
 - 🆕 DeepSeek File Upload: 200+ форматов, `setInputFiles()` + кнопка Send ✅
