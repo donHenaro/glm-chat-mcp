@@ -37,8 +37,8 @@
 
     const API_PATTERNS = {
       glm: ['/api/v2/chat/completions', '/api/chat/', '/api/conversation/', '/completions', '/chat/'],
-      qwen: ['/api/chat/', '/api/conversation/', '/completions'],
-      deepseek: ['/api/chat/', '/api/v0/chat/', '/completions'],
+      qwen: ['/api/v2/chat/completions', '/api/chat/', '/api/conversation/', '/completions'],
+    deepseek: ['/api/v0/chat/completion', '/api/v0/chat/', '/api/chat/', '/completions'],
     };
     const patterns = API_PATTERNS[provider] || [];
 

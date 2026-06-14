@@ -186,12 +186,15 @@ class QwenAdapter extends OpenAIAdapter {
 
 // --- DeepSeekAdapter — адаптер для DeepSeek (chat.deepseek.com) ---
 // SSE формат: {choices:[{delta:{content/reasoning_content:"..."}}]}
+// API: /api/v0/chat/completion (подтверждено тестами)
 // DeepSeek использует reasoning_content для цепочки рассуждений
+// ⚠️ Network hooks НЕ работают: DeepSeek SPA кэширует fetch в замыкании.
+//    Использовать DOM-чтение (.ds-markdown) или page.route() через Playwright.
 class DeepSeekAdapter extends OpenAIAdapter {
-  // DeepSeek уже совместим с OpenAI SSE format
-  // Но использует reasoning_content для thinking
+  // DeepSeek совместим с OpenAI SSE format
+  // Но fetch перехват не работает — использовать DOM fallback
 
-  // DeepSeek-специфичные DOM селекторы
+  // DeepSeek-специфичные DOM селекторы (подтверждены тестами 2026-06-14)
   static SELECTORS = {
     input: 'textarea',
     response: '.ds-markdown',
@@ -323,7 +326,23 @@ window.IProviderAdapter = IProviderAdapter;
 window.GLMAdapter = GLMAdapter;
 window.OpenAIAdapter = OpenAIAdapter;
 window.QwenAdapter = QwenAdapter;
+// --- KimiAdapter — адаптер для Kimi (kimi.com) ---
+// API: gRPC (/apiv2/kimi.chat.v1.ChatService) — НЕ REST+SSE!
+// Network hooks не работают — использовать DOM fallback.
+// Ввод: contenteditable (.chat-input-editor), не textarea
+class KimiAdapter extends OpenAIAdapter {
+  // Kimi использует gRPC, но DOM-чтение работает
+  static SELECTORS = {
+    input: '.chat-input-editor',
+    inputType: 'contenteditable',
+    response: '[class*="markdown"]',
+    spinner: '[class*="loading"]',
+    done: { type: 'text-buttons', copyText: 'Copy' },
+  };
+}
+
 window.DeepSeekAdapter = DeepSeekAdapter;
+window.KimiAdapter = KimiAdapter;
 window.OpenAINormalizer = OpenAINormalizer;
 
 // ============================================
@@ -334,12 +353,14 @@ const host = location.hostname;
 const providerKey = host.includes('z.ai') ? 'glm'
                   : host.includes('qwen') ? 'qwen'
                   : host.includes('deepseek') ? 'deepseek'
+                  : host.includes('kimi') ? 'kimi'
                   : 'unknown';
 
 const ADAPTER_MAP = {
   glm: () => new GLMAdapter(),
   qwen: () => new QwenAdapter(),
   deepseek: () => new DeepSeekAdapter(),
+  kimi: () => new KimiAdapter(),
 };
 window.ADAPTER_MAP = ADAPTER_MAP;
 window.__currentAdapter = ADAPTER_MAP[providerKey]?.() || new OpenAIAdapter();
@@ -397,7 +418,7 @@ window.__currentAdapter = ADAPTER_MAP[providerKey]?.() || new OpenAIAdapter();
       },
       response: {
         primary: '[class*="message-content"]',
-        fallbacks: ['.markdown-body', '[role="article"]'],
+        fallbacks: ['[class*="markdown"]', '[class*="assistant"]', '[class*="chat-message-assistant"]', '[role="article"]'],
       },
       generation: {
         spinner: '[class*="loading"]',
@@ -405,13 +426,14 @@ window.__currentAdapter = ADAPTER_MAP[providerKey]?.() || new OpenAIAdapter();
         thinking: '[class*="thinking"]',
       },
       done: {
-        type: 'text-buttons',
-        copyText: 'Copy',
-        regenerateText: 'Regenerate',
+        type: 'svg-buttons', // Qwen тоже использует SVG-иконки без текста
+        minButtons: 2,
+        selector: 'button svg',
       },
       modes: {
         search: '[class*="search-toggle"]',
         modelSelect: '[class*="model-select"]',
+        deepThink: '[class*="thinking"]',
       },
       files: {
         input: 'input[type="file"]',
@@ -445,6 +467,35 @@ window.__currentAdapter = ADAPTER_MAP[providerKey]?.() || new OpenAIAdapter();
       files: {
         input: 'input[type="file"]',
       },
+    },
+    kimi: {
+      name: 'Kimi',
+      baseUrl: 'https://www.kimi.com',
+      chatPattern: '/chat/',
+      input: {
+        type: 'contenteditable',
+        primary: '.chat-input-editor',
+        fallbacks: ['[contenteditable="true"][role="textbox"]'],
+      },
+      response: {
+        primary: '[class*="markdown"]',
+        fallbacks: ['[class*="message"]', '[class*="assistant"]'],
+      },
+      generation: {
+        spinner: '[class*="loading"]',
+        thinking: '[class*="thinking"]',
+      },
+      done: {
+        type: 'text-buttons',
+        copyText: 'Copy',
+      },
+      modes: {},
+      files: {
+        input: 'input[type="file"]',
+      },
+      // ⚠️ Kimi использует gRPC (/apiv2/kimi.chat.v1.ChatService), не REST+SSE.
+      // Network hooks (fetch interception) НЕ РАБОТАЮТ — использовать DOM fallback.
+      network: 'gRPC',
     },
   };
 
@@ -494,17 +545,27 @@ window.__currentAdapter = ADAPTER_MAP[providerKey]?.() || new OpenAIAdapter();
   }
 
   /** Human-like input: установить значение через native setter + events */
-  function humanInput(textarea, text) {
+  function humanInput(el, text) {
+    // Contenteditable (Kimi и др.)
+    if (el.isContentEditable || el.getAttribute('contenteditable') === 'true') {
+      el.focus();
+      // Используем execCommand для совместимости с React/Vue
+      document.execCommand('selectAll', false, null);
+      document.execCommand('insertText', false, text);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      return;
+    }
+    // Textarea / Input
     const nativeSetter = Object.getOwnPropertyDescriptor(
       window.HTMLTextAreaElement.prototype, 'value'
     )?.set;
     if (nativeSetter) {
-      nativeSetter.call(textarea, text);
+      nativeSetter.call(el, text);
     } else {
-      textarea.value = text;
+      el.value = text;
     }
-    textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    textarea.dispatchEvent(new Event('change', { bubbles: true }));
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
   // === Адаптер ===
@@ -558,19 +619,28 @@ window.__currentAdapter = ADAPTER_MAP[providerKey]?.() || new OpenAIAdapter();
 
     /** Отправить сообщение в чат */
     async send(text) {
-      const textarea = findElement(spec.input);
-      if (!textarea) {
-        return { error: 'no_input', provider: providerKey, hint: 'Textarea not found' };
+      const inputEl = findElement(spec.input);
+      if (!inputEl) {
+        return { error: 'no_input', provider: providerKey, hint: 'Input element not found' };
       }
 
       // Ввести текст
-      humanInput(textarea, text);
+      humanInput(inputEl, text);
       await new Promise(r => setTimeout(r, 300)); // имитация человека
 
-      // Отправить Enter
-      textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      // Отправить — метод зависит от типа ввода
+      const isContenteditable = spec.input.type === 'contenteditable' || inputEl.isContentEditable;
+      if (isContenteditable) {
+        // Contenteditable: Enter через keydown/keypress/keyup
+        ['keydown', 'keypress', 'keyup'].forEach(type => {
+          inputEl.dispatchEvent(new KeyboardEvent(type, { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+        });
+      } else {
+        // Textarea: Enter через keydown
+        inputEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      }
 
-      return { sent: true, provider: providerKey, textLen: text.length };
+      return { sent: true, provider: providerKey, textLen: text.length, inputType: isContenteditable ? 'contenteditable' : 'textarea' };
     },
 
     /** Прочитать последний ответ */
