@@ -519,10 +519,12 @@ glm-chat-mcp/                     ← https://github.com/donHenaro/glm-chat-mcp
 │   ├── session-manager.js        ← 🆕 Session persistence — cookies + localStorage
 │   ├── provider-adapter.js       ← 🆕 Унифицированный провайдер-агностик API
 │   ├── provider-adapters.js      ← 🆕 IProviderAdapter + GLMAdapter + OpenAIAdapter + OpenAINormalizer
+│   ├── ai-extract.js             ← 🆕 AI-powered extract fallback — 5 стратегий извлечения
 │   ├── debug-trace.js            ← 🆕 Debug tracing — логирование действий + ошибки + таймеры
+│   ├── multi-provider.js         ← Параллельный опрос (v14: через adapter)
+│   ├── multi-collect.js          ← 🆕 Сбор ответов multi-provider (adapter → network → ai-extract → DOM)
 │   ├── blob-download.js          ← Blob-перехват (текст + бинарные, try/finally)
-│   ├── progress-monitor.js       ← Мониторинг Agent Mode
-│   └── multi-provider.js         ← Параллельный опрос (rate limit 2с)
+│   └── progress-monitor.js       ← Мониторинг Agent Mode (v14: network-aware)
 ├── plans/                        ← планы развития (анализ аналогов и т.д.)
 ├── log/                          ← логи чатов
 └── test-results.md               ← результаты тестирования селекторов
@@ -624,7 +626,21 @@ spring.jpa.hibernate.ddl-auto=validate.
 
 ## 📋 Changelog
 
-### v14.0.0 (current) — Network Intelligence Edition
+### v14.2.0 (current) — Network Intelligence + AI Extract
+**P1 полностью реализовано:**
+- 🆕 `hooks-auto-init.js` — единая точка входа, auto-init hooks + trace + adapters
+- 🆕 `ai-extract.js` — AI-powered extract fallback (5 стратегий: network → selectors → roles → containers → longest-prose)
+- 🆕 `multi-collect.js` — сбор ответов multi-provider (adapter → network → ai-extract → DOM)
+- `progress-monitor.js` v14: network-aware monitoring (phase, progress%, ETA, netDone)
+- `multi-provider.js` v14: использует adapter.send() когда доступен
+
+**Протестировано:**
+- ✅ fetch-stream через tee() работает на свежей вкладке
+- ✅ answerText="4" для "2+2?" — network detection быстрее DOM
+- ✅ progress-monitor: phase=complete, source=network (DOM ещё spinner!)
+- ✅ ai-extract: 5 стратегий извлечения ответа
+
+### v14.0.0 — Network Intelligence Edition
 **По анализу аналогов (Chat2API, WebModel, CloakBrowser, Stagehand, Steel.dev):**
 - 🆕 `hooks-auto-init.js` — единая точка входа, auto-init hooks + trace + adapters
 - 🆕 `network-hooks.js` — перехват fetch/EventSource, SSE-буфер, парсинг токенов

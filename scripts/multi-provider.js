@@ -1,8 +1,9 @@
 /**
- * scripts/multi-provider.js v13.1
- * Параллельный опрос нескольких провайдеров
+ * scripts/multi-provider.js v14.0
+ * Параллельный опрос нескольких провайдеров через provider-adapter
  *
- * ИСПРАВЛЕНО (по замечаниям GLM):
+ * v14.0: Использует window.__adapter.send()/read() вместо прямых DOM-операций
+ * v13.1: ИСПРАВЛЕНО (по замечаниям GLM):
  * 1. collectResponses() НЕ использует document.querySelectorAll (это другой tab!)
  * 2. Каждый tab читается через tab.evaluate()
  * 3. Rate limiting 2 сек между отправками
@@ -13,7 +14,6 @@
  */
 (async () => {
   // === ЭТАП 1: ОТПРАВКА (быстрая) ===
-  // Агент должен сам переключать вкладки и отправлять через tab.evaluate()
 
   const providers = [
     { name: 'GLM',       url: 'chat.z.ai',      inputSel: '#chat-input',                              responseSel: '.markdown-prose' },
@@ -26,15 +26,23 @@
   const provider = providers.find(p => currentUrl.includes(p.url));
   if (!provider) return { error: 'unknown-provider', url: currentUrl };
 
-  // Находим textarea
+  // === Приоритет: используем adapter если доступен ===
+  if (window.__adapter?.send) {
+    const prompt = window.__multiProviderPrompt;
+    if (!prompt) return { error: 'no-prompt', hint: 'Set window.__multiProviderPrompt before calling', provider: provider.name };
+    
+    const result = await window.__adapter.send(prompt);
+    return { ...result, method: 'adapter' };
+  }
+
+  // === Fallback: прямая DOM-отправка ===
   const textarea = document.querySelector(provider.inputSel);
   if (!textarea) return { error: 'no-textarea', provider: provider.name, selector: provider.inputSel };
 
-  // Читаем промпт из аргумента или переменной
   const prompt = window.__multiProviderPrompt;
   if (!prompt) return { error: 'no-prompt', hint: 'Set window.__multiProviderPrompt before calling' };
 
-  // Вводим текст
+  // Вводим текст через native setter (React compatibility)
   const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
     window.HTMLTextAreaElement.prototype, 'value'
   ).set;
@@ -48,5 +56,5 @@
   // Отправляем Enter
   textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
 
-  return { sent: true, provider: provider.name, promptLength: prompt.length };
-})();
+  return { sent: true, provider: provider.name, promptLength: prompt.length, method: 'dom' };
+})()
