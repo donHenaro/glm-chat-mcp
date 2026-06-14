@@ -1,0 +1,121 @@
+# План развития glm-chat-mcp v14.0 → v15.0
+## На основе анализа аналогов + собственного ревью
+
+Дата: 2026-06-13
+Автор: VeAI + GLM (совместная работа)
+
+---
+
+## 1. Статус: Что уже сделано (v14.0)
+
+### Новые модули (реализовано):
+- ✅ `scripts/network-hooks.js` — перехват fetch/EventSource, SSE-буфер
+- ✅ `scripts/session-manager.js` — persistent sessions через cookies/localStorage
+- ✅ `scripts/provider-adapter.js` — унифицированный провайдер-агностик API
+- ✅ `scripts/response.js` v14.0 — network buffer как приоритетный источник
+- ✅ `SKILL.md` v14.0 — обновлённая архитектура и документация
+
+### Ключевые улучшения:
+- Иерархия detection: network buffer (P0) → DOM селекторы (P1)
+- Унифицированный API: `window.__adapter.observe/send/read`
+- Session persistence: `window.__session.save/restore/status`
+- CloakBrowser: документация для опциональной установки
+
+---
+
+## 2. Анализ аналогов — критическая оценка GLM-плана
+
+### Что реально и подтверждено:
+| Проект | Статус | Что взять | Наша оценка |
+|--------|--------|-----------|-------------|
+| CloakBrowser | ✅ 26K⭐, npm v0.3.31 | Stealth Chromium | P0 — реализовано как рекомендация |
+| Chat2API | ✅ высокий рейтинг | OpenAI API формат | P2 — будущий HTTP bridge |
+| WebModel | ✅ 9 провайдеров | Унифицированный API | P1 — реализовано в provider-adapter.js |
+| Stagehand | ⚠️ не найден на GitHub | AI extract() | P1 — fallback через browser_snapshot |
+| Steel.dev | ⚠️ не проверен | Session persistence | P0 — реализовано через session-manager.js |
+| playwright-extra | ✅ npm v4.3.6, 735K/week | JS stealth | P1 — документация как fallback |
+
+### Что НЕ сработает через MCP Playwright (ограничение архитектуры):
+| Фича | Почему недоступна | Альтернатива |
+|-------|-------------------|-------------|
+| page.route() | Нет в MCP API | ✅ JS injection (network-hooks.js) |
+| exposeFunction() | Нет в MCP API | ✅ Poll через browser_evaluate |
+| storageState() | Нет в MCP API | ✅ JS-level cookies/localStorage |
+| CloakBrowser launch | MCP сервер управляет браузером | ✅ Документация для пользователя |
+| CDPSession | Нет в MCP API | ⚠️ browser_network_requests |
+
+### Собственное дополнение к GLM-плану:
+1. **provider-adapter.js** — GLM не предусмотрел унифицированный адаптер как отдельный модуль
+2. **Идемпотентность всех скриптов** — безопасно вызывать многократно (GLM не упомянул)
+3. **Memory limits в netBuffer** — 50 записей max (GLM не учёл утечки памяти)
+4. **Session validation** — проверка возраста < 7 дней (GLM не учёл устаревание)
+
+---
+
+## 3. Fork от GLM — проверка
+
+❌ **Fork НЕ создан.** На GitHub 0 форков репозитория donHenaro/glm-chat-mcp.
+GLM упомянул о планах сделать fork, но не реализовал.
+
+---
+
+## 4. План доработок (v14.0 → v15.0)
+
+### P1 — Следующий приоритет (4 дня)
+
+#### 4.1 AI-powered extract fallback (1 день)
+- Если network buffer пуст И DOM-селекторы не нашли ответ
+- Использовать browser_snapshot для анализа accessibility tree
+- Парсить текст ответа из snapshot
+- Файл: `scripts/ai-extract.js`
+
+#### 4.2 Улучшение progress-monitor.js (0.5 дня)
+- Интеграция с network-hooks.js для real-time SSE-мониторинга
+- `window.__netBuffer.getLatestTokens()` для progressive reading
+- Показ хода стриминга (кол-во токенов, ETA)
+
+#### 4.3 Debug tracing (0.5 дня)
+- `scripts/debug-trace.js` — логирование всех действий
+- Сохранение трейса в `log/YYYY-MM-DD/trace-*.json`
+- Формат: [{timestamp, action, result, duration}]
+
+#### 4.4 Auto-init при первом обращении (1 день)
+- SKILL.md: обновить workflow — шаг 3.5 "Установить network hooks"
+- Агент автоматически инъецирует network-hooks.js при переходе на вкладку
+- Проверка `window.__netHooksInstalled` — если false, установить
+
+#### 4.5 Multi-provider интеграция с adapter (1 день)
+- Обновить multi-provider.js для работы с provider-adapter
+- Использовать `window.__adapter.send()` вместо прямых DOM-операций
+- Сбор ответов через `window.__adapter.read()` с source индикацией
+
+### P2 — Перспективные (7 дней)
+
+#### 4.6 OpenAI-совместимый API слой (3 дня)
+- HTTP-сервер с /v1/chat/completions
+- Работает через наш MCP Playwright → браузер → провайдер
+- SSE-streaming в OpenAI-формате
+- Интеграция с Cline, Roo-Code, openclaw
+
+#### 4.7 CloakBrowser MCP сервер (2 дня)
+- Кастомный MCP Playwright сервер с CloakBrowser вместо Playwright
+- `npm install cloakbrowser` → автозамена
+- Конфигурация: humanize, proxy, geoip
+
+#### 4.8 CDP interception (1 день)
+- Для провайдеров с WebSocket-ответами
+- Через browser_network_requests MCP инструмент
+
+#### 4.9 HTTP bridge standalone (1 день)
+- Express-сервер как альтернатива MCP
+- Для использования не из IDE
+
+---
+
+## 5. Вопросы для GLM
+
+1. Fork не создан — сделать его сейчас или работать в origin?
+2. network-hooks.js — проверить на реальном GLM чате (перехватывает ли SSE?)
+3. provider-adapter.js — нужны ли дополнительные провайдеры (Kimi, MiniMax)?
+4. CloakBrowser — стоит ли делать кастомный MCP сервер или достаточно документации?
+5. OpenAI API слой — приоритет или подождать?

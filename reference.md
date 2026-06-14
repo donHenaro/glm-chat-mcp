@@ -139,4 +139,24 @@ const fullText = chunks
 ```
 
 ⚠️ SSE-intercept теряется при навигации (beforeunload от Agent Mode).
-Рекомендуется Copy/Regenerate detection вместо SSE-intercept.
+Рекомендуется Copy/Regenerate detection + network-hooks.js как основной метод.
+
+## Network Hooks (v14.0) — рекомендованный метод перехвата
+
+`scripts/network-hooks.js` — перехват fetch/EventSource на уровне страницы.
+
+**Преимущества над SSE-intercept:**
+- Парсинг GLM-формата (delta_content + phase) из коробки
+- Фильтрация thinking vs answer фаз
+- Идемпотентная установка (безопасно вызывать многократно)
+- Буфер с ограничением памяти (50 записей)
+- Сохранение оригинальных API (window.__origFetch) для безопасной переустановки
+
+**API:**
+```javascript
+window.__netBuffer.stats()        // статистика перехваченных запросов
+window.__netBuffer.getLatest()     // последняя запись (url, body, sseTokens, phase)
+window.__netBuffer.getLatestTokens()  // answer-токены как строка
+window.__netBuffer.getLatestThinking() // thinking-токены как строка
+window.__netBuffer.flush()         // очистить буфер
+```

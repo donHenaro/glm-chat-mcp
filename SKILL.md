@@ -8,7 +8,7 @@ used-by:
  - "Code"
 ---
 # when refactoring, never make changes above this line.
-# GLM Chat MCP Skill v13.0 — Scripts Edition
+# GLM Chat MCP Skill v14.0 — Network Intelligence Edition
 ---
 
 ## 🔴 Обязательная активация
@@ -28,10 +28,21 @@ used-by:
 
 ## 🏛️ Архитектура
 
-**UI-отправка + Copy/Regenerate Detection** — единая стратегия для всех провайдеров.
+**Network Intelligence + UI-отправка** — двухуровневая стратегия:
+
+| Уровень | Метод | Надёжность | Когда использовать |
+|---------|-------|:----------:|-------------------|
+| 🥇 1 | Network interception (fetch/EventSource) | ⭐⭐⭐⭐⭐ | Основной — не зависит от DOM |
+| 🥈 2 | DOM-селекторы + fallback-цепочки | ⭐⭐⭐ | Fallback — если network hooks не установлены |
 
 Все 3 провайдера используют защитные механизмы (X-Signature, PoW, Message Tree),
 поэтому прямой API **не рекомендуется**. Отправка через UI — подписи обрабатываются автоматически.
+
+**v14.0 Ключевые улучшения (по анализу аналогов):**
+- **Network hooks** — перехват fetch/EventSource на уровне страницы (вдохновлено: page.route() + Chat2API)
+- **Provider adapter** — унифицированный интерфейс для всех провайдеров (вдохновлено: WebModel)
+- **Session manager** — persistent sessions через cookies/localStorage (вдохновлено: storageState() + Steel.dev)
+- **CloakBrowser support** — рекомендация stealth Chromium (вдохновлено: CloakBrowser 26K⭐)
 
 **Chat Mode vs Agent Mode (GLM):**
 - Chat Mode: 5-15 сек, один шаг, генерация текста
@@ -78,20 +89,24 @@ used-by:
 
 ### 7. Прочитать ответ и записать лог
 `read_file('scripts/response.js')` → `browser_evaluate(readResponse('glm'))`
-Вернёт: `{ done: true/false, textLen, text, provider }`
+Вернёт: `{ done: true/false, textLen, text, source: 'network'|'dom', provider }`
+
+**v14.0:** Если установлены network hooks, ответ сначала ищется в SSE-буфере (network-hooks.js),
+затем — через DOM-селекторы. Это кардинально повышает надёжность detection.
 
 ---
 
 ## 🎯 Response Detection — детализация
 
-### Иерархия надёжности (по данным GLM)
+### Иерархия надёжности (v14.0 — обновлено по анализу аналогов)
 
-| Приоритет | Индикатор | Надёжность | Примечание |
-|:---------:|-----------|:----------:|------------|
-| 🥇 1 | Copy / Regenerate кнопки | ⭐⭐⭐⭐⭐ | Пост-рендерный сигнал — только после полного завершения |
-| 🥈 2 | Исчезновение Stop | ⭐⭐⭐⭐ | Надёжно, но задержка перед Copy |
-| 🥉 3 | Исчезновение thinking | ⭐⭐⭐ | Доп. сигнал, не самостоятельный |
-| 4 | innerText.length стабильность | ⭐⭐ | Fallback — ложные срабатывания при Agent Mode паузах |
+| Приоритет | Индикатор | Надёжность | Источник | Примечание |
+|:---------:|-----------|:----------:|----------|------------|
+| 🥇 0 | Network buffer (SSE-токены) | ⭐⭐⭐⭐⭐ | network-hooks.js | Перехват на уровне HTTP — не зависит от DOM |
+| 🥈 1 | Copy / Regenerate кнопки | ⭐⭐⭐⭐⭐ | DOM | Пост-рендерный сигнал — только после полного завершения |
+| 🥉 2 | Исчезновение Stop | ⭐⭐⭐⭐ | DOM | Надёжно, но задержка перед Copy |
+| 3 | Исчезновение thinking | ⭐⭐⭐ | DOM | Доп. сигнал, не самостоятельный |
+| 4 | innerText.length стабильность | ⭐⭐ | DOM | Fallback — ложные срабатывания при Agent Mode паузах |
 
 ### Селекторы по провайдерам
 
@@ -422,27 +437,55 @@ Caused by: java.net.ConnectException: Connection refused
 
 ---
 
-## 🛡️ Production Readiness (по результатам мульти-консультации)
+## 🛡️ Production Readiness (v14.0 — обновлено по анализу аналогов)
 
 ### Startup Health-Check
-response.js
-Проверяет все селекторы при инициализации. Если селектор не найден → "Selector outdated for Provider X"
+response.js + provider-adapter.js
+Проверяет все селекторы + network hooks + session manager при инициализации.
+Если селектор не найден → "Selector outdated for Provider X"
+`browser_evaluate('window.__adapter.healthCheck()')`
 
 ### Anti-Bot защита
-- Использовать `playwright-extra` с плагином `stealth`
+- **CloakBrowser** (рекомендуется) — stealth Chromium с 58 C++ патчами, 26K⭐
+  `npm install cloakbrowser` → drop-in замена Playwright
+- **playwright-extra** (fallback) — JS-level stealth патчи
+  `npm install playwright-extra puppeteer-extra-plugin-stealth`
 - **НЕ** использовать `page.fill()` — использовать human-like typing (50-150мс задержки)
 - Рандомные паузы между запросами (2-5 сек)
 
+### Network Interception (🆕 v14.0)
+network-hooks.js — перехват fetch/EventSource на уровне страницы:
+- SSE-токены буферизуются в `window.__netBuffer`
+- Парсинг OpenAI-совместимого формата (choices[0].delta.content)
+- Fallback на DOM если network buffer пуст
+- Идемпотентная установка — безопасно вызывать многократно
+
+### Session Persistence (🆕 v14.0)
+session-manager.js — сохранение/восстановление сессии:
+- `window.__session.save()` → JSON с cookies + localStorage + sessionStorage
+- `window.__session.restore(data)` → восстановление из JSON
+- `window.__session.status()` → проверка авторизации
+- Валидация: проверка возраста сессии (< 7 дней)
+
+### Provider Adapter (🆕 v14.0)
+provider-adapter.js — унифицированный интерфейс:
+- `observe()` — полная диагностика состояния страницы
+- `send(text)` — отправка сообщения через human-like input
+- `read()` — чтение ответа (network → DOM)
+- `healthCheck()` — проверка всех систем
+
 ### Multi-tier Locators (fallback-цепочка)
-response.js
+response.js + provider-adapter.js
 - GLM: `.markdown-prose` → `[class*="prose"]` → `[data-message-role="assistant"]`
 - Qwen: `[class*="message-content"]` → `.markdown-body` → `[role="article"]`
 - DeepSeek: `.ds-markdown` → `[class*="markdown"]` → `[role="article"]`
+- При срабатывании fallback — console.warn для наблюдаемости
 
 ### Resource Management
 - 3 персистентных контекста (по одному на провайдера) — НЕ создавать новый на запрос
 - `browserContext.close()` при остановке MCP-сервера
 - Мониторинг RAM: если вкладка >500MB → перезагрузить
+- Network buffer ограничен 50 записями (автоочистка старых)
 
 ### Context Overflow Recovery
 1. Парсить UI-ошибку: "Сообщение слишком длинное" / "History exceeded"
@@ -470,10 +513,14 @@ glm-chat-mcp/                     ← https://github.com/donHenaro/glm-chat-mcp
 ├── _meta.json                    ← машиночитаемый конфиг (единый источник версий)
 ├── reference.md                  ← техническая справка API провайдеров
 ├── scripts/                      ← JS-скрипты для browser_evaluate
-│   ├── response.js               ← Response Detection + чтение + healthCheck
+│   ├── response.js               ← Response Detection + чтение + healthCheck (v14: network priority)
+│   ├── network-hooks.js          ← 🆕 Network interception — перехват fetch/EventSource, SSE-буфер
+│   ├── session-manager.js        ← 🆕 Session persistence — cookies + localStorage
+│   ├── provider-adapter.js       ← 🆕 Унифицированный провайдер-агностик API
 │   ├── blob-download.js          ← Blob-перехват (текст + бинарные, try/finally)
 │   ├── progress-monitor.js       ← Мониторинг Agent Mode
 │   └── multi-provider.js         ← Параллельный опрос (rate limit 2с)
+├── plans/                        ← планы развития (анализ аналогов и т.д.)
 ├── log/                          ← логи чатов
 └── test-results.md               ← результаты тестирования селекторов
 ```
@@ -481,6 +528,30 @@ glm-chat-mcp/                     ← https://github.com/donHenaro/glm-chat-mcp
 ### Как использовать скрипты
 1. `read_file('scripts/<name>.js')` — прочитать содержимое
 2. `browser_evaluate(<function_body>)` — выполнить нужную функцию в контексте страницы
+
+### 🆕 Порядок инициализации (v14.0)
+При первом обращении к провайдеру в сессии:
+1. `browser_evaluate(filename='network-hooks.js')` — установить перехват сети
+2. `browser_evaluate(filename='session-manager.js')` — инициализировать менеджер сессий
+3. `browser_evaluate(filename='provider-adapter.js')` — инициализировать адаптер
+
+После инициализации использовать:
+- `browser_evaluate('window.__adapter.observe()')` — полная диагностика состояния
+- `browser_evaluate('window.__adapter.read()')` — чтение ответа (network → DOM)
+- `browser_evaluate('window.__adapter.healthCheck()')` — проверка всех систем
+- `browser_evaluate('window.__session.status()')` — статус авторизации
+- `browser_evaluate('window.__netBuffer.stats()')` — статистика перехваченных запросов
+
+### CloakBrowser (опционально, для stealth)
+Если провайдер добавляет бот-детекцию, установите CloakBrowser:
+```bash
+npm install cloakbrowser playwright-core
+```
+Запуск MCP Playwright сервера с CloakBrowser:
+```bash
+npx @playwright/mcp --browser chromium  # CloakBrowser подхватится автоматически
+```
+CloakBrowser: 26K⭐, 58 C++ патчей, drop-in замена Playwright, проходит 30/30 бот-тестов.
 
 ### Репозиторий: https://github.com/donHenaro/glm-chat-mcp.git
 
@@ -541,7 +612,20 @@ spring.jpa.hibernate.ddl-auto=validate.
 
 ## 📋 Changelog
 
-### v13.1.0 (current) — Bugfix + Merge
+### v14.0.0 (current) — Network Intelligence Edition
+**По анализу аналогов (Chat2API, WebModel, CloakBrowser, Stagehand, Steel.dev):**
+- 🆕 `network-hooks.js` — перехват fetch/EventSource, SSE-буфер, парсинг токенов
+- 🆕 `session-manager.js` — persistent sessions через cookies/localStorage
+- 🆕 `provider-adapter.js` — унифицированный провайдер-агностик API (observe/send/read)
+- `response.js` v14: network buffer как приоритетный источник перед DOM-селекторами
+- `response.js` v14: healthCheck() теперь проверяет network hooks + session manager
+- `extractLastResponse()` возвращает `source: 'network'|'dom'`
+- SKILL.md: обновлена иерархия надёжности (network buffer = приоритет 0)
+- SKILL.md: добавлен раздел CloakBrowser (опциональный stealth)
+- SKILL.md: добавлен порядок инициализации v14.0
+- Анализ аналогов: `plans/Аналоги_glm-chat-mcp_и_Playwright_фичи_v1.txt`
+
+### v13.1.0 — Bugfix + Merge
 **Fixed (по замечаниям GLM + Qwen + DeepSeek):**
 - `detect-response.js` + `extract-text.js` → объединены в `response.js`
 - `blob-download.js`: try/finally для URL.createObjectURL, ArrayBuffer→base64

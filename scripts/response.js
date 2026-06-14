@@ -1,7 +1,14 @@
 /**
- * Response — единый модуль для detection + extraction + health-check
+ * Response v14.0 — Unified response detection + extraction + health-check
  * Объединяет detect-response.js + extract-text.js (по рекомендации GLM)
- * 
+ *
+ * v14.0: Добавлен network buffer как приоритетный источник данных
+ * перед DOM-селекторами. Вдохновлено: page.route() + Chat2API SSE-streaming
+ *
+ * Иерархия источников данных:
+ * 1. Network buffer (network-hooks.js) — SSE-ответы на уровне HTTP
+ * 2. DOM-селекторы с fallback-цепочками — проверенный подход
+ *
  * Fallback-цепочки селекторов (по рекомендации GLM + Qwen)
  * При срабатывании fallback — console.warn для наблюдаемости (по рекомендации Qwen)
  */
@@ -56,18 +63,31 @@ function isGLMResponseDone() {
   const actionBtns = Array.from(btns).filter(b => b.className.includes('visible') && b.querySelector('svg'));
   const spinner = !!document.querySelector('[class*="spinner"]');
 
+  // Проверяем network buffer — если есть завершённый SSE-ответ, это надёжнее
+  const netLatest = window.__netBuffer?.getLatest();
+  const netDone = netLatest && !netLatest.error && netLatest.sseTokens?.length > 0;
+
   return {
-    done: actionBtns.length >= 2 && !spinner,
+    done: (actionBtns.length >= 2 && !spinner) || netDone,
     textLen: last.innerText.length,
     text: last.innerText,
     spinner,
+    source: netDone ? 'network' : 'dom',
   };
 }
 
 /**
  * Универсальное чтение ответа (любой провайдер)
+ * Приоритет: network buffer → DOM
  */
 function readResponse(provider) {
+  // Приоритет 1: network buffer (если установлен network-hooks.js)
+  const netTokens = window.__netBuffer?.getLatestTokens();
+  if (netTokens && netTokens.length > 0) {
+    return netTokens.replace(/^Thought Process\n/, '').trim();
+  }
+
+  // Приоритет 2: DOM-селекторы
   const elements = detectResponseElements(provider);
   const last = elements[elements.length - 1];
   if (!last) return '';
@@ -78,10 +98,19 @@ function readResponse(provider) {
 
 /**
  * Прочитать последний ответ провайдера (для extract-text)
+ * Возвращает текст + источник (network/dom)
  */
 function extractLastResponse(provider) {
+  // Приоритет 1: network buffer
+  const netTokens = window.__netBuffer?.getLatestTokens();
+  if (netTokens && netTokens.length > 0) {
+    const text = netTokens.replace(/^Thought Process\n/, '').trim();
+    return { text, len: text.length, source: 'network' };
+  }
+
+  // Приоритет 2: DOM
   const text = readResponse(provider);
-  return { text, len: text.length };
+  return { text, len: text.length, source: 'dom' };
 }
 
 /**
@@ -97,7 +126,7 @@ function extractAllResponses(provider) {
 }
 
 /**
- * Startup Health-Check — проверить все селекторы
+ * Startup Health-Check — проверить все селекторы + network hooks
  */
 function healthCheck() {
   const results = {};
@@ -109,6 +138,18 @@ function healthCheck() {
       results[provider] = { ok: false, error: e.message };
     }
   }
+
+  // Проверяем network hooks
+  results._network = {
+    installed: !!window.__netHooksInstalled,
+    bufferLen: window.__netBuffer?.entries?.length || 0,
+  };
+
+  // Проверяем session manager
+  results._session = {
+    installed: !!window.__session,
+  };
+
   return results;
 }
 
@@ -121,7 +162,7 @@ function formatCheckpoint(chatId, provider, knownContext) {
     provider,
     timestamp: new Date().toISOString(),
     knownContext: knownContext || {},
-    format: 'v1',
+    format: 'v2',
   };
 }
 
