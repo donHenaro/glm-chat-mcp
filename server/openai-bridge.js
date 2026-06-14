@@ -14,21 +14,23 @@
  *     → SSE response back to client
  *
  * Запуск:
- *   node server/openai-bridge.js --port 8080
+ *   node server/openai-bridge.js --port=8102
  *
  * Использование:
- *   curl http://localhost:8080/v1/chat/completions \
+ *   curl http://localhost:8102/v1/chat/completions \
  *     -H "Content-Type: application/json" \
  *     -d '{"model":"glm-5.1","messages":[{"role":"user","content":"Hello"}],"stream":true}'
  *
  * Совместимость: Cline, Roo-Code, ChatBox, Open WebUI, anythingLLM
+ *
+ * Порт по умолчанию: 8102 (безопасный диапазон 8100-8199)
  */
 
 const express = require('express');
 const { chromium } = require('playwright');
 
 // === Configuration ===
-const PORT = parseInt(process.env.PORT || process.argv.find(a => a.startsWith('--port='))?.split('=')[1] || '8080', 10);
+const PORT = parseInt(process.env.PORT || process.argv.find(a => a.startsWith('--port='))?.split('=')[1] || '8102', 10);
 const HEADLESS = process.env.HEADLESS !== 'false'; // default: headless
 const PROVIDERS = {
   'glm-5.1':    { url: 'https://chat.z.ai',              adapter: 'glm' },
