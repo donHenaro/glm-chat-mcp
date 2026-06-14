@@ -632,7 +632,26 @@ spring.jpa.hibernate.ddl-auto=validate.
 
 ## 📋 Changelog
 
-### v14.4.0 (current) — P3.1 Production Hardening
+### v15.0.0 (current) — P3 Complete: E2E + Function Calling + Token Accuracy
+
+**P3.2 Compatibility:**
+- 🆕 E2E test suite: 11/11 tests pass (`server/test-e2e.js`)
+- 🆕 Real chat completion via CDP: prompt→GLM→response in OpenAI format
+- 🆕 Function Calling эмуляция: tools → system prompt injection → parse tool_calls from response
+- 🆕 `stream_options: {include_usage: true}` → usage in final `[DONE]` chunk
+- 🆕 Token estimation: char→token heuristic (4 chars ≈ 1 token for English, 1.5 chars ≈ 1 token for CJK)
+- 🆕 `parseToolCalls()`: extracts `\u003ctool_call\u003e` JSON blocks from model response
+
+**E2E Test Results:**
+- ✅ GET /v1/models — 6 models
+- ✅ POST /v1/chat/completions — real response: "YES"
+- ✅ Usage: prompt=9, completion=1
+- ✅ Function calling — tools accepted, tool_prompt injected
+- ✅ stream_options.include_usage accepted
+- ✅ Streaming SSE in OpenAI format
+- ✅ CDP connection to Chrome — browser:connected
+
+### v14.4.0 — P3.1 Production Hardening
 **P3.1 реализовано:**
 - 🆕 API Authentication: Bearer token + query key (env API_KEYS)
 - 🆕 Rate Limiting: per-key, X-RateLimit-* headers, 429 errors

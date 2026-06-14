@@ -208,7 +208,7 @@ app.get('/v1/models', (req, res) => {
 
 // === Main endpoint ===
 app.post('/v1/chat/completions', async (req, res) => {
-  const { model = DEFAULT_MODEL, messages, stream = false } = req.body;
+  const { model = DEFAULT_MODEL, messages, stream = false, tools, tool_choice, stream_options } = req.body;
 
   if (!messages || messages.length === 0) {
     return res.status(400).json({ error: { message: 'messages is required', type: 'invalid_request_error' } });
@@ -231,7 +231,36 @@ app.post('/v1/chat/completions', async (req, res) => {
   if (!lastUserMsg) {
     return res.status(400).json({ error: { message: 'No user message found', type: 'invalid_request_error' } });
   }
-  const prompt = typeof lastUserMsg.content === 'string' ? lastUserMsg.content : JSON.stringify(lastUserMsg.content);
+  let prompt = typeof lastUserMsg.content === 'string' ? lastUserMsg.content : JSON.stringify(lastUserMsg.content);
+
+  // === Function Calling Emulation ===
+  // If client sends tools, inject them as prompt instructions
+  // so the model knows about available tools and can output structured JSON
+  let toolDefinitions = null;
+  if (tools && tools.length > 0) {
+    toolDefinitions = tools;
+    const toolInstructions = tools.map(t => {
+      const func = t.function;
+      const params = func.parameters?.properties ? JSON.stringify(func.parameters) : 'none';
+      return `- ${func.name}: ${func.description || 'No description'}. Parameters: ${params}`;
+    }).join('\n');
+
+    const toolSystemMsg = `[TOOL INSTRUCTIONS]
+You have access to the following tools. When you need to call a tool, respond with a JSON block in this exact format:
+\`\`\`json
+{"tool_calls": [{"name": "function_name", "arguments": {"param1": "value1"}}]}
+\`\`\`
+
+Available tools:
+${toolInstructions}
+
+Important: Only use tool calls when the task requires it. For normal questions, respond with regular text.
+[/TOOL INSTRUCTIONS]
+
+`;
+    prompt = toolSystemMsg + prompt;
+    console.log(`[bridge] Tools injected: ${tools.length} tools`);
+  }
 
   console.log(`[bridge] Request: model=${model}, prompt=${prompt.slice(0, 100)}...`);
   metrics.requestsTotal++;
@@ -325,6 +354,22 @@ app.post('/v1/chat/completions', async (req, res) => {
       const chatId = `chatcmpl-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
       const startTime = Date.now();
 
+      // Token counting helper (approximate: ~4 chars per token for English, ~2 for CJK)
+      function estimateTokens(text) {
+        if (!text) return 0;
+        // Rough approximation: count CJK chars as 1 token each, others as ~4 chars/token
+        const cjkChars = (text.match(/[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]/g) || []).length;
+        const otherChars = text.length - cjkChars;
+        return Math.ceil(cjkChars + otherChars / 4);
+      }
+
+      // Estimate prompt tokens from messages
+      const promptText = messages.map(m => typeof m.content === 'string' ? m.content : JSON.stringify(m.content)).join(' ');
+      const promptTokens = estimateTokens(promptText);
+
+      // Check if client wants usage in stream (OpenAI stream_options)
+      const includeStreamUsage = req.body.stream_options?.include_usage === true;
+
       if (stream) {
         // SSE streaming response
         res.setHeader('Content-Type', 'text/event-stream');
@@ -332,7 +377,8 @@ app.post('/v1/chat/completions', async (req, res) => {
         res.setHeader('Connection', 'keep-alive');
 
         // First chunk: role
-        res.write(`data: ${JSON.stringify({ id: chatId, object: 'chat.completion.chunk', created: Math.floor(Date.now()/1000), model, choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }] })}\n\n`);
+        const firstChunk = { id: chatId, object: 'chat.completion.chunk', created: Math.floor(Date.now()/1000), model, choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }] };
+        res.write(`data: ${JSON.stringify(firstChunk)}\n\n`);
 
         // Poll network buffer for new tokens
         let lastTokenCount = 0;
@@ -365,8 +411,51 @@ app.post('/v1/chat/completions', async (req, res) => {
           lastTokenCount = state.total;
 
           if (state.complete && state.total > 0) {
-            // Final chunk
-            res.write(`data: ${JSON.stringify({ id: chatId, object: 'chat.completion.chunk', created: Math.floor(Date.now()/1000), model, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`);
+            // Collect all answer/thinking tokens for token counting and tool_calls parsing
+            const allTokens = await page.evaluate(() => {
+              const latest = window.__netBuffer?.getLatest();
+              const tokens = latest?.sseTokens || [];
+              const answer = tokens.filter(t => t.phase === 'answer').map(t => t.text || '').join('');
+              const thinking = tokens.filter(t => t.phase === 'thinking').map(t => t.text || '').join('');
+              return { answer, thinking };
+            });
+            const completionTokens = estimateTokens(allTokens.answer + allTokens.thinking);
+
+            // Check for tool_calls in streaming response
+            let streamFinishReason = 'stop';
+            if (toolDefinitions && allTokens.answer) {
+              const toolCallRegex = /```json\s*([\s\S]*?)```/;
+              const match = allTokens.answer.match(toolCallRegex);
+              if (match) {
+                try {
+                  const parsed = JSON.parse(match[1]);
+                  if (parsed.tool_calls && Array.isArray(parsed.tool_calls)) {
+                    streamFinishReason = 'tool_calls';
+                    // Emit tool_calls chunks in streaming format
+                    for (let i = 0; i < parsed.tool_calls.length; i++) {
+                      const tc = parsed.tool_calls[i];
+                      const toolChunk = {
+                        id: chatId, object: 'chat.completion.chunk', created: Math.floor(Date.now()/1000), model,
+                        choices: [{ index: 0, delta: { tool_calls: [{ index: i, id: `call_${Date.now()}_${i}`, type: 'function', function: { name: tc.name, arguments: typeof tc.arguments === 'string' ? tc.arguments : JSON.stringify(tc.arguments) } }] }, finish_reason: null }]
+                      };
+                      res.write(`data: ${JSON.stringify(toolChunk)}\n\n`);
+                    }
+                    console.log(`[bridge] Streamed ${parsed.tool_calls.length} tool_calls`);
+                  }
+                } catch { /* not tool_calls JSON */ }
+              }
+            }
+
+            // Final chunk with finish_reason
+            const finalChunk = { id: chatId, object: 'chat.completion.chunk', created: Math.floor(Date.now()/1000), model, choices: [{ index: 0, delta: {}, finish_reason: streamFinishReason }] };
+            res.write(`data: ${JSON.stringify(finalChunk)}\n\n`);
+
+            // Usage chunk (if requested via stream_options.include_usage)
+            if (includeStreamUsage) {
+              const usageChunk = { id: chatId, object: 'chat.completion.chunk', created: Math.floor(Date.now()/1000), model, choices: [], usage: { prompt_tokens: promptTokens, completion_tokens: completionTokens, total_tokens: promptTokens + completionTokens } };
+              res.write(`data: ${JSON.stringify(usageChunk)}\n\n`);
+            }
+
             res.write('data: [DONE]\n\n');
             break;
           }
@@ -396,6 +485,57 @@ app.post('/v1/chat/completions', async (req, res) => {
           if (state.complete && answerText.length > 0) break;
         }
 
+        // === Parse tool_calls from response (Function Calling Emulation) ===
+        let parsedToolCalls = null;
+        let contentText = answerText;
+        let finishReason = 'stop';
+
+        if (toolDefinitions) {
+          // Try to extract tool_calls JSON from the response
+          const toolCallRegex = /```json\s*([\s\S]*?)```/;
+          const match = answerText.match(toolCallRegex);
+          if (match) {
+            try {
+              const parsed = JSON.parse(match[1]);
+              if (parsed.tool_calls && Array.isArray(parsed.tool_calls)) {
+                parsedToolCalls = parsed.tool_calls.map((tc, idx) => ({
+                  id: `call_${Date.now()}_${idx}`,
+                  type: 'function',
+                  function: {
+                    name: tc.name,
+                    arguments: typeof tc.arguments === 'string' ? tc.arguments : JSON.stringify(tc.arguments),
+                  }
+                }));
+                finishReason = 'tool_calls';
+                contentText = null; // OpenAI sets content to null when tool_calls present
+                console.log(`[bridge] Parsed ${parsedToolCalls.length} tool_calls from response`);
+              }
+            } catch (e) {
+              console.warn('[bridge] Failed to parse tool_calls JSON:', e.message);
+            }
+          }
+
+          // Also try raw JSON without markdown fences
+          if (!parsedToolCalls) {
+            try {
+              const parsed = JSON.parse(answerText);
+              if (parsed.tool_calls && Array.isArray(parsed.tool_calls)) {
+                parsedToolCalls = parsed.tool_calls.map((tc, idx) => ({
+                  id: `call_${Date.now()}_${idx}`,
+                  type: 'function',
+                  function: {
+                    name: tc.name,
+                    arguments: typeof tc.arguments === 'string' ? tc.arguments : JSON.stringify(tc.arguments),
+                  }
+                }));
+                finishReason = 'tool_calls';
+                contentText = null;
+                console.log(`[bridge] Parsed ${parsedToolCalls.length} tool_calls from raw JSON`);
+              }
+            } catch { /* not JSON, that's fine */ }
+          }
+        }
+
         const response = {
           id: chatId,
           object: 'chat.completion',
@@ -405,12 +545,13 @@ app.post('/v1/chat/completions', async (req, res) => {
             index: 0,
             message: {
               role: 'assistant',
-              content: answerText,
+              content: contentText,
               ...(thinkingText ? { reasoning_content: thinkingText } : {}),
+              ...(parsedToolCalls ? { tool_calls: parsedToolCalls } : {}),
             },
-            finish_reason: 'stop',
+            finish_reason: finishReason,
           }],
-          usage: { prompt_tokens: 0, completion_tokens: answerText.length, total_tokens: answerText.length },
+          usage: { prompt_tokens: promptTokens, completion_tokens: estimateTokens(answerText + thinkingText), total_tokens: promptTokens + estimateTokens(answerText + thinkingText) },
         };
 
         // Cache the response
