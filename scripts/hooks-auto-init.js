@@ -156,7 +156,7 @@
     Debug.success('AUTO-INIT', 'Debug trace initialized');
   }
 
-  // === Step 3: Initialize adapters (if provider-adapters.js was loaded) ===
+  // === Step 3: Initialize adapters (if provider-adapter.js SSE classes were loaded) ===
   if (!window.__currentAdapter && window.GLMAdapter) {
     window.__currentAdapter = provider === 'glm' ? new GLMAdapter() : new OpenAIAdapter();
     Debug.success('AUTO-INIT', `Adapter: ${window.__currentAdapter.constructor.name}`);

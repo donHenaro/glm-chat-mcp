@@ -1,29 +1,357 @@
 /**
- * scripts/provider-adapter.js v14.0
+ * scripts/provider-adapter.js v15.0
  * Унифицированный провайдер-агностик API — единый интерфейс для всех чатов.
  *
- * ПРОБЛЕМА: каждый провайдер — свой набор селекторов и логики.
- * РЕШЕНИЕ: ProviderAdapter с единым интерфейсом {navigate, detect, send, read, monitor},
- * где каждый провайдер реализует конкретные стратегии.
- *
- * Вдохновлено: WebModel (унифицированный API) + Stagehand (observe/extract/act)
+ * Содержит:
+ *   Part 1 — SSE-level классы (IProviderAdapter, GLMAdapter, OpenAIAdapter, QwenAdapter, DeepSeekAdapter, OpenAINormalizer)
+ *   Part 2 — Автоопределение провайдера, window.__currentAdapter через ADAPTER_MAP
+ *   Part 3 — DOM-level IIFE: window.__adapter с observe/send/read/monitor/healthCheck
  *
  * Вызов: browser_evaluate(filename='provider-adapter.js')
  * Затем: browser_evaluate('window.__adapter.send("prompt text")')
  *        browser_evaluate('window.__adapter.read()')
- *        browser_evaluate('window.__adapter.monitor()')
+ *        browser_evaluate('window.__currentAdapter.readFromBuffer()')
+ *        browser_evaluate('new OpenAINormalizer().normalizeFull()')
  */
+
+// ============================================
+// Part 1: SSE-level adapter classes
+// ============================================
+
+// --- IProviderAdapter — базовый интерфейс ---
+class IProviderAdapter {
+  /** Парсит сырой SSE-чанк */
+  parseSSE(rawChunk) { throw new Error('Not implemented'); }
+  /** Извлекает текст из распарсенного чанка */
+  extractContent(parsedChunk) { throw new Error('Not implemented'); }
+  /** Проверяет завершение стрима */
+  isDone(parsedChunk) { throw new Error('Not implemented'); }
+  /** Определяет фазу генерации */
+  getPhase(parsedChunk) { throw new Error('Not implemented'); }
+}
+
+// --- GLMAdapter — адаптер для ChatGLM ---
+// API: /api/v2/chat/completions
+// Формат: {type:"chat:completion", data:{delta_content, phase:"thinking"|"answer"}}
+class GLMAdapter extends IProviderAdapter {
+  /**
+   * Парсит сырую строку SSE или объект
+   * @param {string|object} rawChunk
+   * @returns {object|null}
+   */
+  parseSSE(rawChunk) {
+    if (!rawChunk) return null;
+
+    // Если уже объект (из __netBuffer)
+    if (typeof rawChunk === 'object') return rawChunk;
+
+    // Если строка
+    const trimmed = rawChunk.trim();
+    if (trimmed === '[DONE]') return { __done: true };
+
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      // В SSE бывают префиксы "data: "
+      const cleanStr = trimmed.replace(/^data:\s*/, '');
+      if (cleanStr === '[DONE]') return { __done: true };
+      try {
+        return JSON.parse(cleanStr);
+      } catch {
+        console.warn('[GLMAdapter] Failed to parse SSE chunk:', trimmed.slice(0, 100));
+        return null;
+      }
+    }
+  }
+
+  /** Извлекает текст из GLM-чанка */
+  extractContent(parsedChunk) {
+    if (!parsedChunk || parsedChunk.__done) return '';
+    return parsedChunk?.data?.delta_content || '';
+  }
+
+  /** Проверяет завершение стрима */
+  isDone(parsedChunk) {
+    if (!parsedChunk) return false;
+    return parsedChunk.__done === true || parsedChunk?.data?.phase === 'done';
+  }
+
+  /** Определяет фазу генерации */
+  getPhase(parsedChunk) {
+    if (!parsedChunk || parsedChunk.__done) return 'done';
+    return parsedChunk?.data?.phase || 'unknown';
+  }
+
+  /**
+   * Читает данные из window.__netBuffer и возвращает массив распарсенных чанков
+   * @returns {Array<{text, phase, done}>}
+   */
+  readFromBuffer() {
+    const latest = window.__netBuffer?.getLatest();
+    if (!latest?.sseTokens?.length) return [];
+
+    return latest.sseTokens.map(token => {
+      if (typeof token === 'object') {
+        return { text: token.text || '', phase: token.phase || 'unknown', done: false };
+      }
+      return { text: token, phase: 'unknown', done: false };
+    });
+  }
+
+  /**
+   * Собрать полный ответ из буфера (только answer-фаза)
+   * @returns {string}
+   */
+  getAnswerText() {
+    const chunks = this.readFromBuffer();
+    return chunks
+      .filter(c => c.phase === 'answer')
+      .map(c => c.text)
+      .join('');
+  }
+
+  /**
+   * Собрать полный thinking из буфера
+   * @returns {string}
+   */
+  getThinkingText() {
+    const chunks = this.readFromBuffer();
+    return chunks
+      .filter(c => c.phase === 'thinking')
+      .map(c => c.text)
+      .join('');
+  }
+}
+
+// --- OpenAIAdapter — адаптер для OpenAI-совместимых API (DeepSeek, Qwen) ---
+// Формат: {choices:[{delta:{content:"..."}}]}
+class OpenAIAdapter extends IProviderAdapter {
+  parseSSE(rawChunk) {
+    if (!rawChunk) return null;
+    if (typeof rawChunk === 'object') return rawChunk;
+    const trimmed = rawChunk.trim();
+    if (trimmed === '[DONE]') return { __done: true };
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      const cleanStr = trimmed.replace(/^data:\s*/, '');
+      if (cleanStr === '[DONE]') return { __done: true };
+      try { return JSON.parse(cleanStr); } catch { return null; }
+    }
+  }
+
+  extractContent(parsedChunk) {
+    if (!parsedChunk || parsedChunk.__done) return '';
+    return parsedChunk?.choices?.[0]?.delta?.content
+        || parsedChunk?.choices?.[0]?.delta?.reasoning_content
+        || '';
+  }
+
+  isDone(parsedChunk) {
+    if (!parsedChunk) return false;
+    return parsedChunk.__done === true
+        || parsedChunk?.choices?.[0]?.finish_reason === 'stop';
+  }
+
+  getPhase(parsedChunk) {
+    if (!parsedChunk || parsedChunk.__done) return 'done';
+    const delta = parsedChunk?.choices?.[0]?.delta;
+    if (delta?.reasoning_content) return 'thinking';
+    if (delta?.content) return 'answer';
+    return 'unknown';
+  }
+}
+
+// --- QwenAdapter — адаптер для Qwen (chat.qwen.ai) ---
+// SSE формат: {choices:[{delta:{content:"..."}}]} или {output: {text: "...", finish_reason: null}}
+class QwenAdapter extends OpenAIAdapter {
+  parseSSE(rawChunk) {
+    const parsed = super.parseSSE(rawChunk);
+    if (!parsed || parsed.__done) return parsed;
+    // Qwen может использовать format: {output:{text, finish_reason}}
+    if (parsed?.output?.text && !parsed?.choices) {
+      return { choices: [{ delta: { content: parsed.output.text }, finish_reason: parsed.output.finish_reason || null }] };
+    }
+    return parsed;
+  }
+
+  // Qwen-специфичные DOM селекторы
+  static SELECTORS = {
+    input: 'textarea.message-input-textarea',
+    response: '[class*="message-content"]',
+    spinner: '[class*="loading"]',
+    done: { type: 'text-buttons', copyText: 'Copy' },
+  };
+}
+
+// --- DeepSeekAdapter — адаптер для DeepSeek (chat.deepseek.com) ---
+// SSE формат: {choices:[{delta:{content/reasoning_content:"..."}}]}
+// DeepSeek использует reasoning_content для цепочки рассуждений
+class DeepSeekAdapter extends OpenAIAdapter {
+  // DeepSeek уже совместим с OpenAI SSE format
+  // Но использует reasoning_content для thinking
+
+  // DeepSeek-специфичные DOM селекторы
+  static SELECTORS = {
+    input: 'textarea',
+    response: '.ds-markdown',
+    spinner: '[class*="loading"]',
+    done: { type: 'text-buttons', copyText: 'Copy' },
+  };
+}
+
+// --- OpenAINormalizer — транслятор GLM→OpenAI SSE ---
+// Вход: GLM SSE {type:chat:completion, data:{delta_content, phase}}
+// Выход: OpenAI SSE {choices:[{delta:{content/reasoning_content}}]}
+class OpenAINormalizer {
+  constructor(modelName = 'glm-5.1') {
+    this.model = modelName;
+    this.chatId = `chatcmpl-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    this.isFirstChunk = true;
+    this.chunks = [];
+  }
+
+  /**
+   * Конвертирует один GLM-чанк в формат OpenAI SSE
+   * @param {object} parsedChunk - от GLMAdapter.parseSSE()
+   * @param {string} phase - от GLMAdapter.getPhase()
+   * @returns {string|null} Строка "data: {...}\n\n" или null
+   */
+  normalize(parsedChunk, phase) {
+    // Завершение стрима
+    if (!parsedChunk || parsedChunk.__done || phase === 'done') {
+      const finalChunk = {
+        id: this.chatId,
+        object: 'chat.completion.chunk',
+        created: Math.floor(Date.now() / 1000),
+        model: this.model,
+        choices: [{ index: 0, delta: {}, finish_reason: 'stop' }]
+      };
+      return `data: ${JSON.stringify(finalChunk)}\n\ndata: [DONE]\n\n`;
+    }
+
+    const content = parsedChunk?.data?.delta_content || '';
+    if (!content && !this.isFirstChunk) return null;
+
+    const delta = {};
+
+    // Первый чанк — роль assistant
+    if (this.isFirstChunk) {
+      delta.role = 'assistant';
+      this.isFirstChunk = false;
+    }
+
+    // Маппинг фаз: thinking → reasoning_content, answer → content
+    if (phase === 'thinking') {
+      delta.reasoning_content = content;
+    } else {
+      delta.content = content;
+    }
+
+    const openAIChunk = {
+      id: this.chatId,
+      object: 'chat.completion.chunk',
+      created: Math.floor(Date.now() / 1000),
+      model: this.model,
+      choices: [{ index: 0, delta, finish_reason: null }]
+    };
+
+    this.chunks.push(openAIChunk);
+    return `data: ${JSON.stringify(openAIChunk)}\n\n`;
+  }
+
+  /**
+   * Нормализовать полный ответ из __netBuffer в OpenAI SSE stream
+   * @returns {string} Полный OpenAI SSE стрим
+   */
+  normalizeFull() {
+    const adapter = new GLMAdapter();
+    const bufferChunks = adapter.readFromBuffer();
+
+    if (!bufferChunks.length) return '';
+
+    // Сброс состояния
+    this.isFirstChunk = true;
+    this.chunks = [];
+
+    let output = '';
+    for (const chunk of bufferChunks) {
+      // Восстанавливаем формат для parseSSE
+      const fakeParsed = {
+        data: { delta_content: chunk.text, phase: chunk.phase }
+      };
+      const normalized = this.normalize(fakeParsed, chunk.phase);
+      if (normalized) output += normalized;
+    }
+
+    // Финальный чанк
+    output += this.normalize({ __done: true }, 'done');
+
+    return output;
+  }
+
+  /**
+   * Получить итоговый ответ как OpenAI chat.completion (не-streaming)
+   * @returns {object} OpenAI-совместимый объект
+   */
+  toCompletionResponse() {
+    const adapter = new GLMAdapter();
+    const answerText = adapter.getAnswerText();
+    const thinkingText = adapter.getThinkingText();
+
+    return {
+      id: this.chatId,
+      object: 'chat.completion',
+      created: Math.floor(Date.now() / 1000),
+      model: this.model,
+      choices: [{
+        index: 0,
+        message: {
+          role: 'assistant',
+          content: answerText,
+          ...(thinkingText ? { reasoning_content: thinkingText } : {})
+        },
+        finish_reason: 'stop'
+      }],
+      usage: { prompt_tokens: 0, completion_tokens: answerText.length, total_tokens: answerText.length }
+    };
+  }
+}
+
+// === Экспорт SSE-классов в глобальную область видимости ===
+window.IProviderAdapter = IProviderAdapter;
+window.GLMAdapter = GLMAdapter;
+window.OpenAIAdapter = OpenAIAdapter;
+window.QwenAdapter = QwenAdapter;
+window.DeepSeekAdapter = DeepSeekAdapter;
+window.OpenAINormalizer = OpenAINormalizer;
+
+// ============================================
+// Part 2: Auto-detect provider, create window.__currentAdapter
+// ============================================
+
+const host = location.hostname;
+const providerKey = host.includes('z.ai') ? 'glm'
+                  : host.includes('qwen') ? 'qwen'
+                  : host.includes('deepseek') ? 'deepseek'
+                  : 'unknown';
+
+const ADAPTER_MAP = {
+  glm: () => new GLMAdapter(),
+  qwen: () => new QwenAdapter(),
+  deepseek: () => new DeepSeekAdapter(),
+};
+window.ADAPTER_MAP = ADAPTER_MAP;
+window.__currentAdapter = ADAPTER_MAP[providerKey]?.() || new OpenAIAdapter();
+
+// ============================================
+// Part 3: DOM-level adapter (IIFE)
+// ============================================
+
 (() => {
   if (window.__adapter) {
     return { status: 'already_initialized', provider: window.__adapter.provider };
   }
-
-  // === Определяем провайдера ===
-  const host = location.hostname;
-  const providerKey = host.includes('z.ai') ? 'glm'
-                    : host.includes('qwen') ? 'qwen'
-                    : host.includes('deepseek') ? 'deepseek'
-                    : 'unknown';
 
   // === Спецификации провайдеров ===
   const PROVIDERS = {
@@ -312,7 +640,8 @@
   return {
     status: 'initialized',
     provider: providerKey,
+    sseAdapter: window.__currentAdapter.constructor.name,
     providerName: spec.name,
-    hint: 'Use window.__adapter.observe() / .send(text) / .read() / .healthCheck()',
+    hint: 'Use window.__adapter.observe() / .send(text) / .read() / .healthCheck() — window.__currentAdapter for SSE-level access',
   };
 })()
