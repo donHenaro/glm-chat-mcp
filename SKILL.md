@@ -22,6 +22,7 @@ GLM Chat MCP is a browser-automation skill for consulting GLM, Qwen, and DeepSee
 | **GLM** | `zai`, `спроси glm`, `ask glm`, `реализуй`, `создай`, `агент`, `исследуй` |
 | **Qwen** | `qwen`, `спроси qwen`, `ask qwen`, `обсуди с qwen` |
 | **DeepSeek** | `deepseek`, `спроси deepseek`, `ask deepseek` |
+| **Kimi** | `kimi`, `спроси kimi`, `ask kimi` |
 | **Все** | `спроси всех`, `обсуди со всеми`, `мнение экспертов`, `консенсус`, `все провайдеры` |
 
 ⛔ Не закрывать браузер после консультации
@@ -112,16 +113,29 @@ glm-chat-mcp/
 
 | Provider | Send | Network (SSE) | DOM | Input Type | API Endpoint |
 |----------|------|---------------|-----|------------|-------------|
-| **GLM** | ✅ | ✅ 18-492 tok | ✅ | textarea | `/api/v2/chat/completions` |
-| **Qwen** | ✅ | ✅ 1-30 tok | ✅ | textarea | `/api/v2/chat/completions` |
-| **DeepSeek** | ✅ | ⚠️ re-override | ✅ | textarea | `/api/v0/chat/completion` |
-| **Kimi** | ✅ | ❌ gRPC | ✅ | contenteditable | gRPC-web |
+| **GLM** | ✅ | ✅ 18-492 tok | ✅ | textarea | `/api/v2/chat/completions` | ✅ Agent, DeepThink, Search | ✅ setInputFiles |
+| **Qwen** | ✅ | ✅ 1-30 tok | ✅ | textarea | `/api/v2/chat/completions` | ✅ DeepThink, Search | ✅ setInputFiles |
+| **DeepSeek** | ✅ | ⚠️ re-override | ✅ | textarea + кнопка | `/api/v0/chat/completion` | ✅ DeepThink, Search, Fast | ✅ setInputFiles (200+ форматов) |
+| **Kimi** | ✅ | ❌ gRPC | ✅ | contenteditable | gRPC-web | ✅ Agent Swarm, Deep Research, Code | ❌ нет file input |
 
 ---
 
 ## 📝 Changelog
 
-### v15.1.0 (current) — Multi-Provider Testing: GLM ✅ Qwen ✅ DeepSeek ✅ Kimi ✅
+### v15.2.0 (current) — Advanced Mode Testing: DeepThink ✅ Agent ✅ Files ✅
+
+- 🆕 GLM File Upload: `setInputFiles()` на скрытый input работает — прочитал файл ✅
+- 🆕 DeepSeek File Upload: 200+ форматов, `setInputFiles()` + кнопка Send ✅
+- 🆕 Qwen File Upload: `setInputFiles()` на скрытый input работает ✅
+- 🆕 DeepSeek DeepThink: "Глубокое мышление" включено, reasoning в ответе ✅
+- 🆕 DeepSeek sendMode: 'button' — кнопка отправки вместо Enter ✅
+- 🆕 GLM Agent Mode + DeepThink + Web Search — все режимы протестированы ✅
+- 🆕 Qwen DeepThink: "Автоматический" (3 опции), thinking selector найден ✅
+- 🆕 Kimi: Agent Swarm, Deep Research, Slides, Code — 9 режимов в sidebar ✅
+- 🆕 `docs/plans/provider-advanced-testing-results.md` — полный отчёт
+- 🆕 Provider status table: добавлены Mode + File колонки
+
+### v15.1.0 — Multi-Provider Testing: GLM ✅ Qwen ✅ DeepSeek ✅ Kimi ✅
 
 - 🆕 Kimi adapter: contenteditable input, gRPC (DOM-only), `.chat-input-editor`
 - 🆕 Contenteditable support in `humanInput()`: `execCommand('insertText')` for React/Vue

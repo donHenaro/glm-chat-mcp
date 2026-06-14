@@ -443,6 +443,7 @@ window.__currentAdapter = ADAPTER_MAP[providerKey]?.() || new OpenAIAdapter();
       name: 'DeepSeek',
       baseUrl: 'https://chat.deepseek.com',
       chatPattern: '/a/chat/s/',
+      sendMode: 'button', // DeepSeek: нужна кнопка отправки, Enter не работает
       input: {
         primary: 'textarea',
         fallbacks: ['textarea[class*="input"]'],
@@ -462,7 +463,9 @@ window.__currentAdapter = ADAPTER_MAP[providerKey]?.() || new OpenAIAdapter();
         regenerateText: 'Regenerate',
       },
       modes: {
-        deepThink: '[class*="deepthink"], [class*="reasoner"]',
+        fast: 'button:text("Быстрый режим")',
+        deepThink: 'button:text("Глубокое мышление")',
+        search: 'button:text("Умный поиск")',
       },
       files: {
         input: 'input[type="file"]',
@@ -628,9 +631,13 @@ window.__currentAdapter = ADAPTER_MAP[providerKey]?.() || new OpenAIAdapter();
       humanInput(inputEl, text);
       await new Promise(r => setTimeout(r, 300)); // имитация человека
 
-      // Отправить — метод зависит от типа ввода
+      // Отправить — метод зависит от провайдера
       const isContenteditable = spec.input.type === 'contenteditable' || inputEl.isContentEditable;
-      if (isContenteditable) {
+      if (spec.sendMode === 'button') {
+        // DeepSeek и подобные: нажать кнопку отправки вместо Enter
+        const sendBtn = document.querySelector('.ds-button--circle.ds-button--primary, button[class*="send"]');
+        if (sendBtn) sendBtn.click();
+      } else if (isContenteditable) {
         // Contenteditable: Enter через keydown/keypress/keyup
         ['keydown', 'keypress', 'keyup'].forEach(type => {
           inputEl.dispatchEvent(new KeyboardEvent(type, { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
@@ -640,7 +647,7 @@ window.__currentAdapter = ADAPTER_MAP[providerKey]?.() || new OpenAIAdapter();
         inputEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
       }
 
-      return { sent: true, provider: providerKey, textLen: text.length, inputType: isContenteditable ? 'contenteditable' : 'textarea' };
+      return { sent: true, provider: providerKey, textLen: text.length, inputType: isContenteditable ? 'contenteditable' : 'textarea', sendMethod: spec.sendMode || 'enter' };
     },
 
     /** Прочитать последний ответ */
