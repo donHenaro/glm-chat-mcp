@@ -156,10 +156,32 @@
     Debug.success('AUTO-INIT', 'Debug trace initialized');
   }
 
-  // === Step 3: Initialize adapters (if provider-adapter.js SSE classes were loaded) ===
-  if (!window.__currentAdapter && window.GLMAdapter) {
+  // === Step 3: Initialize provider modules (if not yet loaded) ===
+  // Provider modules are loaded via browser_evaluate in this order:
+  //   1. providers/base-adapter.js    → IProviderAdapter
+  //   2. providers/spec.js            → PROVIDERS, getProviderSpec
+  //   3. providers/glm-adapter.js     → GLMAdapter
+  //   4. providers/qwen-adapter.js    → OpenAIAdapter, QwenAdapter
+  //   5. providers/deepseek-adapter.js → DeepSeekAdapter
+  //   6. providers/kimi-adapter.js    → KimiAdapter
+  //   7. providers/openai-normalizer.js → OpenAINormalizer
+  //   8. providers/index.js           → createAdapter, ADAPTER_MAP, detect, createForHost
+  //
+  // If window.__providers is already set (modules loaded), just verify.
+  if (window.__providers) {
+    Debug.success('AUTO-INIT', `Provider modules loaded: ${Object.keys(window.__providers).join(', ')}`);
+  } else {
+    Debug.warn('AUTO-INIT', 'window.__providers not yet loaded — provider modules must be injected before provider-adapter.js');
+  }
+
+  // Initialize __currentAdapter from modules if available
+  if (!window.__currentAdapter && window.__providers?.createForHost) {
+    window.__currentAdapter = window.__providers.createForHost();
+    Debug.success('AUTO-INIT', `Adapter: ${window.__currentAdapter.constructor.name} (from modules)`);
+  } else if (!window.__currentAdapter && window.GLMAdapter) {
+    // Fallback: legacy direct class access
     window.__currentAdapter = provider === 'glm' ? new GLMAdapter() : new OpenAIAdapter();
-    Debug.success('AUTO-INIT', `Adapter: ${window.__currentAdapter.constructor.name}`);
+    Debug.success('AUTO-INIT', `Adapter: ${window.__currentAdapter.constructor.name} (legacy)`);
   }
 
   // === Log result ===

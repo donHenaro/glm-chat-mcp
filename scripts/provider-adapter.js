@@ -1,13 +1,23 @@
 /**
- * scripts/provider-adapter.js v15.0
+ * scripts/provider-adapter.js v16.0
  * Унифицированный провайдер-агностик API — единый интерфейс для всех чатов.
  *
- * Содержит:
- *   Part 1 — SSE-level классы (IProviderAdapter, GLMAdapter, OpenAIAdapter, QwenAdapter, DeepSeekAdapter, OpenAINormalizer)
- *   Part 2 — Автоопределение провайдера, window.__currentAdapter через ADAPTER_MAP
- *   Part 3 — DOM-level IIFE: window.__adapter с observe/send/read/monitor/healthCheck
+ * ТОНКИЙ ОРКЕСТРАТОР:
+ *   Part 1 — Загрузка провайдер-модулей (scripts/providers/*.js) → window.__providers
+ *   Part 2 — DOM-level IIFE: window.__adapter с observe/send/read/monitor/healthCheck
+ *
+ * Модули (загружаются в window.__providers через browser_evaluate):
+ *   - scripts/providers/base-adapter.js      → IProviderAdapter
+ *   - scripts/providers/spec.js              → PROVIDERS, getProviderSpec
+ *   - scripts/providers/glm-adapter.js       → GLMAdapter
+ *   - scripts/providers/qwen-adapter.js      → OpenAIAdapter, QwenAdapter
+ *   - scripts/providers/deepseek-adapter.js  → DeepSeekAdapter
+ *   - scripts/providers/kimi-adapter.js      → KimiAdapter
+ *   - scripts/providers/openai-normalizer.js → OpenAINormalizer
+ *   - scripts/providers/index.js             → createAdapter, ADAPTER_MAP, detect, createForHost
  *
  * Вызов: browser_evaluate(filename='provider-adapter.js')
+ *   (Модули должны быть загружены ДО этого файла — см. hooks-auto-init.js)
  * Затем: browser_evaluate('window.__adapter.send("prompt text")')
  *        browser_evaluate('window.__adapter.read()')
  *        browser_evaluate('window.__currentAdapter.readFromBuffer()')
@@ -15,358 +25,16 @@
  */
 
 // ============================================
-// Part 1: SSE-level adapter classes
+// Part 1: Initialize from provider modules
 // ============================================
 
-// --- IProviderAdapter — базовый интерфейс ---
-class IProviderAdapter {
-  /** Парсит сырой SSE-чанк */
-  parseSSE(rawChunk) { throw new Error('Not implemented'); }
-  /** Извлекает текст из распарсенного чанка */
-  extractContent(parsedChunk) { throw new Error('Not implemented'); }
-  /** Проверяет завершение стрима */
-  isDone(parsedChunk) { throw new Error('Not implemented'); }
-  /** Определяет фазу генерации */
-  getPhase(parsedChunk) { throw new Error('Not implemented'); }
+const P = window.__providers;
+if (!P) {
+  console.error('[provider-adapter] window.__providers not initialized! Provider modules must be loaded first.');
 }
-
-// --- GLMAdapter — адаптер для ChatGLM ---
-// API: /api/v2/chat/completions
-// Формат: {type:"chat:completion", data:{delta_content, phase:"thinking"|"answer"}}
-class GLMAdapter extends IProviderAdapter {
-  /**
-   * Парсит сырую строку SSE или объект
-   * @param {string|object} rawChunk
-   * @returns {object|null}
-   */
-  parseSSE(rawChunk) {
-    if (!rawChunk) return null;
-
-    // Если уже объект (из __netBuffer)
-    if (typeof rawChunk === 'object') return rawChunk;
-
-    // Если строка
-    const trimmed = rawChunk.trim();
-    if (trimmed === '[DONE]') return { __done: true };
-
-    try {
-      return JSON.parse(trimmed);
-    } catch {
-      // В SSE бывают префиксы "data: "
-      const cleanStr = trimmed.replace(/^data:\s*/, '');
-      if (cleanStr === '[DONE]') return { __done: true };
-      try {
-        return JSON.parse(cleanStr);
-      } catch {
-        console.warn('[GLMAdapter] Failed to parse SSE chunk:', trimmed.slice(0, 100));
-        return null;
-      }
-    }
-  }
-
-  /** Извлекает текст из GLM-чанка */
-  extractContent(parsedChunk) {
-    if (!parsedChunk || parsedChunk.__done) return '';
-    return parsedChunk?.data?.delta_content || '';
-  }
-
-  /** Проверяет завершение стрима */
-  isDone(parsedChunk) {
-    if (!parsedChunk) return false;
-    return parsedChunk.__done === true || parsedChunk?.data?.phase === 'done';
-  }
-
-  /** Определяет фазу генерации */
-  getPhase(parsedChunk) {
-    if (!parsedChunk || parsedChunk.__done) return 'done';
-    return parsedChunk?.data?.phase || 'unknown';
-  }
-
-  /**
-   * Читает данные из window.__netBuffer и возвращает массив распарсенных чанков
-   * @returns {Array<{text, phase, done}>}
-   */
-  readFromBuffer() {
-    const latest = window.__netBuffer?.getLatest();
-    if (!latest?.sseTokens?.length) return [];
-
-    return latest.sseTokens.map(token => {
-      if (typeof token === 'object') {
-        return { text: token.text || '', phase: token.phase || 'unknown', done: false };
-      }
-      return { text: token, phase: 'unknown', done: false };
-    });
-  }
-
-  /**
-   * Собрать полный ответ из буфера (только answer-фаза)
-   * @returns {string}
-   */
-  getAnswerText() {
-    const chunks = this.readFromBuffer();
-    return chunks
-      .filter(c => c.phase === 'answer')
-      .map(c => c.text)
-      .join('');
-  }
-
-  /**
-   * Собрать полный thinking из буфера
-   * @returns {string}
-   */
-  getThinkingText() {
-    const chunks = this.readFromBuffer();
-    return chunks
-      .filter(c => c.phase === 'thinking')
-      .map(c => c.text)
-      .join('');
-  }
-}
-
-// --- OpenAIAdapter — адаптер для OpenAI-совместимых API (DeepSeek, Qwen) ---
-// Формат: {choices:[{delta:{content:"..."}}]}
-class OpenAIAdapter extends IProviderAdapter {
-  parseSSE(rawChunk) {
-    if (!rawChunk) return null;
-    if (typeof rawChunk === 'object') return rawChunk;
-    const trimmed = rawChunk.trim();
-    if (trimmed === '[DONE]') return { __done: true };
-    try {
-      return JSON.parse(trimmed);
-    } catch {
-      const cleanStr = trimmed.replace(/^data:\s*/, '');
-      if (cleanStr === '[DONE]') return { __done: true };
-      try { return JSON.parse(cleanStr); } catch { return null; }
-    }
-  }
-
-  extractContent(parsedChunk) {
-    if (!parsedChunk || parsedChunk.__done) return '';
-    return parsedChunk?.choices?.[0]?.delta?.content
-        || parsedChunk?.choices?.[0]?.delta?.reasoning_content
-        || '';
-  }
-
-  isDone(parsedChunk) {
-    if (!parsedChunk) return false;
-    return parsedChunk.__done === true
-        || parsedChunk?.choices?.[0]?.finish_reason === 'stop';
-  }
-
-  getPhase(parsedChunk) {
-    if (!parsedChunk || parsedChunk.__done) return 'done';
-    const delta = parsedChunk?.choices?.[0]?.delta;
-    if (delta?.reasoning_content) return 'thinking';
-    if (delta?.content) return 'answer';
-    return 'unknown';
-  }
-}
-
-// --- QwenAdapter — адаптер для Qwen (chat.qwen.ai) ---
-// SSE формат: {choices:[{delta:{content:"..."}}]} или {output: {text: "...", finish_reason: null}}
-class QwenAdapter extends OpenAIAdapter {
-  parseSSE(rawChunk) {
-    const parsed = super.parseSSE(rawChunk);
-    if (!parsed || parsed.__done) return parsed;
-    // Qwen может использовать format: {output:{text, finish_reason}}
-    if (parsed?.output?.text && !parsed?.choices) {
-      return { choices: [{ delta: { content: parsed.output.text }, finish_reason: parsed.output.finish_reason || null }] };
-    }
-    return parsed;
-  }
-
-  // Qwen-специфичные DOM селекторы
-  static SELECTORS = {
-    input: 'textarea.message-input-textarea',
-    response: '[class*="message-content"]',
-    spinner: '[class*="loading"]',
-    done: { type: 'text-buttons', copyText: 'Copy' },
-  };
-}
-
-// --- DeepSeekAdapter — адаптер для DeepSeek (chat.deepseek.com) ---
-// SSE формат: {choices:[{delta:{content/reasoning_content:"..."}}]}
-// API: /api/v0/chat/completion (подтверждено тестами)
-// DeepSeek использует reasoning_content для цепочки рассуждений
-// ⚠️ Network hooks НЕ работают: DeepSeek SPA кэширует fetch в замыкании.
-//    Использовать DOM-чтение (.ds-markdown) или page.route() через Playwright.
-class DeepSeekAdapter extends OpenAIAdapter {
-  // DeepSeek совместим с OpenAI SSE format
-  // Но fetch перехват не работает — использовать DOM fallback
-
-  // DeepSeek-специфичные DOM селекторы (подтверждены тестами 2026-06-14)
-  static SELECTORS = {
-    input: 'textarea',
-    response: '.ds-markdown',
-    spinner: '[class*="loading"]',
-    done: { type: 'text-buttons', copyText: 'Copy' },
-  };
-}
-
-// --- OpenAINormalizer — транслятор GLM→OpenAI SSE ---
-// Вход: GLM SSE {type:chat:completion, data:{delta_content, phase}}
-// Выход: OpenAI SSE {choices:[{delta:{content/reasoning_content}}]}
-class OpenAINormalizer {
-  constructor(modelName = 'glm-5.1') {
-    this.model = modelName;
-    this.chatId = `chatcmpl-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    this.isFirstChunk = true;
-    this.chunks = [];
-  }
-
-  /**
-   * Конвертирует один GLM-чанк в формат OpenAI SSE
-   * @param {object} parsedChunk - от GLMAdapter.parseSSE()
-   * @param {string} phase - от GLMAdapter.getPhase()
-   * @returns {string|null} Строка "data: {...}\n\n" или null
-   */
-  normalize(parsedChunk, phase) {
-    // Завершение стрима
-    if (!parsedChunk || parsedChunk.__done || phase === 'done') {
-      const finalChunk = {
-        id: this.chatId,
-        object: 'chat.completion.chunk',
-        created: Math.floor(Date.now() / 1000),
-        model: this.model,
-        choices: [{ index: 0, delta: {}, finish_reason: 'stop' }]
-      };
-      return `data: ${JSON.stringify(finalChunk)}\n\ndata: [DONE]\n\n`;
-    }
-
-    const content = parsedChunk?.data?.delta_content || '';
-    if (!content && !this.isFirstChunk) return null;
-
-    const delta = {};
-
-    // Первый чанк — роль assistant
-    if (this.isFirstChunk) {
-      delta.role = 'assistant';
-      this.isFirstChunk = false;
-    }
-
-    // Маппинг фаз: thinking → reasoning_content, answer → content
-    if (phase === 'thinking') {
-      delta.reasoning_content = content;
-    } else {
-      delta.content = content;
-    }
-
-    const openAIChunk = {
-      id: this.chatId,
-      object: 'chat.completion.chunk',
-      created: Math.floor(Date.now() / 1000),
-      model: this.model,
-      choices: [{ index: 0, delta, finish_reason: null }]
-    };
-
-    this.chunks.push(openAIChunk);
-    return `data: ${JSON.stringify(openAIChunk)}\n\n`;
-  }
-
-  /**
-   * Нормализовать полный ответ из __netBuffer в OpenAI SSE stream
-   * @returns {string} Полный OpenAI SSE стрим
-   */
-  normalizeFull() {
-    const adapter = new GLMAdapter();
-    const bufferChunks = adapter.readFromBuffer();
-
-    if (!bufferChunks.length) return '';
-
-    // Сброс состояния
-    this.isFirstChunk = true;
-    this.chunks = [];
-
-    let output = '';
-    for (const chunk of bufferChunks) {
-      // Восстанавливаем формат для parseSSE
-      const fakeParsed = {
-        data: { delta_content: chunk.text, phase: chunk.phase }
-      };
-      const normalized = this.normalize(fakeParsed, chunk.phase);
-      if (normalized) output += normalized;
-    }
-
-    // Финальный чанк
-    output += this.normalize({ __done: true }, 'done');
-
-    return output;
-  }
-
-  /**
-   * Получить итоговый ответ как OpenAI chat.completion (не-streaming)
-   * @returns {object} OpenAI-совместимый объект
-   */
-  toCompletionResponse() {
-    const adapter = new GLMAdapter();
-    const answerText = adapter.getAnswerText();
-    const thinkingText = adapter.getThinkingText();
-
-    return {
-      id: this.chatId,
-      object: 'chat.completion',
-      created: Math.floor(Date.now() / 1000),
-      model: this.model,
-      choices: [{
-        index: 0,
-        message: {
-          role: 'assistant',
-          content: answerText,
-          ...(thinkingText ? { reasoning_content: thinkingText } : {})
-        },
-        finish_reason: 'stop'
-      }],
-      usage: { prompt_tokens: 0, completion_tokens: answerText.length, total_tokens: answerText.length }
-    };
-  }
-}
-
-// === Экспорт SSE-классов в глобальную область видимости ===
-window.IProviderAdapter = IProviderAdapter;
-window.GLMAdapter = GLMAdapter;
-window.OpenAIAdapter = OpenAIAdapter;
-window.QwenAdapter = QwenAdapter;
-// --- KimiAdapter — адаптер для Kimi (kimi.com) ---
-// API: gRPC (/apiv2/kimi.chat.v1.ChatService) — НЕ REST+SSE!
-// Network hooks не работают — использовать DOM fallback.
-// Ввод: contenteditable (.chat-input-editor), не textarea
-class KimiAdapter extends OpenAIAdapter {
-  // Kimi использует gRPC, но DOM-чтение работает
-  static SELECTORS = {
-    input: '.chat-input-editor',
-    inputType: 'contenteditable',
-    response: '[class*="markdown"]',
-    spinner: '[class*="loading"]',
-    done: { type: 'text-buttons', copyText: 'Copy' },
-  };
-}
-
-window.DeepSeekAdapter = DeepSeekAdapter;
-window.KimiAdapter = KimiAdapter;
-window.OpenAINormalizer = OpenAINormalizer;
 
 // ============================================
-// Part 2: Auto-detect provider, create window.__currentAdapter
-// ============================================
-
-const host = location.hostname;
-const providerKey = host.includes('z.ai') ? 'glm'
-                  : host.includes('qwen') ? 'qwen'
-                  : host.includes('deepseek') ? 'deepseek'
-                  : host.includes('kimi') ? 'kimi'
-                  : 'unknown';
-
-const ADAPTER_MAP = {
-  glm: () => new GLMAdapter(),
-  qwen: () => new QwenAdapter(),
-  deepseek: () => new DeepSeekAdapter(),
-  kimi: () => new KimiAdapter(),
-};
-window.ADAPTER_MAP = ADAPTER_MAP;
-window.__currentAdapter = ADAPTER_MAP[providerKey]?.() || new OpenAIAdapter();
-
-// ============================================
-// Part 3: DOM-level adapter (IIFE)
+// Part 2: DOM-level adapter (IIFE)
 // ============================================
 
 (() => {
@@ -374,137 +42,12 @@ window.__currentAdapter = ADAPTER_MAP[providerKey]?.() || new OpenAIAdapter();
     return { status: 'already_initialized', provider: window.__adapter.provider };
   }
 
-  // === Спецификации провайдеров ===
-  const PROVIDERS = {
-    glm: {
-      name: 'GLM',
-      baseUrl: 'https://chat.z.ai',
-      chatPattern: '/c/',
-      input: {
-        primary: '#chat-input',
-        fallbacks: ['textarea[class*="input"]', 'textarea'],
-      },
-      response: {
-        primary: '.markdown-prose',
-        fallbacks: ['[class*="prose"]', '[data-message-role="assistant"]'],
-      },
-      generation: {
-        spinner: '[class*="spinner"]',
-        stop: 'button:has-text("Stop")',
-        thinking: '[class*="thinking"]',
-      },
-      done: {
-        type: 'svg-buttons', // GLM использует SVG-иконки без текста
-        minButtons: 2,
-        selector: 'button svg',
-      },
-      modes: {
-        agent: '.toolbar-icon.agent',
-        deepThink: '[class*="thinking-toggle"]',
-        webSearch: '.toolbar-icon.search',
-      },
-      files: {
-        input: 'input[type="file"]',
-        blockedExtensions: ['.java', '.js', '.ts', '.kt', '.scala', '.go', '.rs', '.cpp'],
-      },
-    },
-    qwen: {
-      name: 'Qwen',
-      baseUrl: 'https://chat.qwen.ai',
-      chatPattern: '/c/',
-      input: {
-        primary: 'textarea.message-input-textarea',
-        fallbacks: ['textarea[class*="input"]', 'textarea'],
-      },
-      response: {
-        primary: '[class*="message-content"]',
-        fallbacks: ['[class*="markdown"]', '[class*="assistant"]', '[class*="chat-message-assistant"]', '[role="article"]'],
-      },
-      generation: {
-        spinner: '[class*="loading"]',
-        stop: 'button:has-text("Stop")',
-        thinking: '[class*="thinking"]',
-      },
-      done: {
-        type: 'svg-buttons', // Qwen тоже использует SVG-иконки без текста
-        minButtons: 2,
-        selector: 'button svg',
-      },
-      modes: {
-        search: '[class*="search-toggle"]',
-        modelSelect: '[class*="model-select"]',
-        deepThink: '[class*="thinking"]',
-      },
-      files: {
-        input: 'input[type="file"]',
-      },
-    },
-    deepseek: {
-      name: 'DeepSeek',
-      baseUrl: 'https://chat.deepseek.com',
-      chatPattern: '/a/chat/s/',
-      sendMode: 'button', // DeepSeek: нужна кнопка отправки, Enter не работает
-      input: {
-        primary: 'textarea',
-        fallbacks: ['textarea[class*="input"]'],
-      },
-      response: {
-        primary: '.ds-markdown',
-        fallbacks: ['[class*="markdown"]', '[role="article"]'],
-      },
-      generation: {
-        spinner: '[class*="loading"]',
-        stop: 'button:has-text("Stop")',
-        thinking: '[class*="think"]',
-      },
-      done: {
-        type: 'text-buttons',
-        copyText: 'Copy',
-        regenerateText: 'Regenerate',
-      },
-      modes: {
-        fast: 'button:text("Быстрый режим")',
-        deepThink: 'button:text("Глубокое мышление")',
-        search: 'button:text("Умный поиск")',
-      },
-      files: {
-        input: 'input[type="file"]',
-      },
-    },
-    kimi: {
-      name: 'Kimi',
-      baseUrl: 'https://www.kimi.com',
-      chatPattern: '/chat/',
-      input: {
-        type: 'contenteditable',
-        primary: '.chat-input-editor',
-        fallbacks: ['[contenteditable="true"][role="textbox"]'],
-      },
-      response: {
-        primary: '[class*="markdown"]',
-        fallbacks: ['[class*="message"]', '[class*="assistant"]'],
-      },
-      generation: {
-        spinner: '[class*="loading"]',
-        thinking: '[class*="thinking"]',
-      },
-      done: {
-        type: 'text-buttons',
-        copyText: 'Copy',
-      },
-      modes: {},
-      files: {
-        input: 'input[type="file"]',
-      },
-      // ⚠️ Kimi использует gRPC (/apiv2/kimi.chat.v1.ChatService), не REST+SSE.
-      // Network hooks (fetch interception) НЕ РАБОТАЮТ — использовать DOM fallback.
-      network: 'gRPC',
-    },
-  };
+  // Получаем спецификацию и адаптер из модулей
+  const providerKey = P ? P.detect() : 'unknown';
+  const spec = P ? P.getProviderSpec(providerKey) : null;
 
-  const spec = PROVIDERS[providerKey];
   if (!spec) {
-    return { error: 'unknown_provider', host, hint: 'Navigate to a supported chat provider first' };
+    return { error: 'unknown_provider', host: location.hostname, hint: 'Navigate to a supported chat provider first' };
   }
 
   // === Утилиты ===
@@ -717,7 +260,7 @@ window.__currentAdapter = ADAPTER_MAP[providerKey]?.() || new OpenAIAdapter();
   return {
     status: 'initialized',
     provider: providerKey,
-    sseAdapter: window.__currentAdapter.constructor.name,
+    sseAdapter: window.__currentAdapter?.constructor?.name || 'none',
     providerName: spec.name,
     hint: 'Use window.__adapter.observe() / .send(text) / .read() / .healthCheck() — window.__currentAdapter for SSE-level access',
   };
