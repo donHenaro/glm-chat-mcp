@@ -280,10 +280,54 @@ class OpenAINormalizer {
   }
 }
 
+// ============================================
+// QwenAdapter — адаптер для Qwen (chat.qwen.ai)
+// SSE формат: {choices:[{delta:{content:"..."}}]} или {output: {text: "...", finish_reason: null}}
+// ============================================
+class QwenAdapter extends OpenAIAdapter {
+  parseSSE(rawChunk) {
+    const parsed = super.parseSSE(rawChunk);
+    if (!parsed || parsed.__done) return parsed;
+    // Qwen может использовать format: {output:{text, finish_reason}}
+    if (parsed?.output?.text && !parsed?.choices) {
+      return { choices: [{ delta: { content: parsed.output.text }, finish_reason: parsed.output.finish_reason || null }] };
+    }
+    return parsed;
+  }
+
+  // Qwen-специфичные DOM селекторы
+  static SELECTORS = {
+    input: 'textarea.message-input-textarea',
+    response: '[class*="message-content"]',
+    spinner: '[class*="loading"]',
+    done: { type: 'text-buttons', copyText: 'Copy' },
+  };
+}
+
+// ============================================
+// DeepSeekAdapter — адаптер для DeepSeek (chat.deepseek.com)
+// SSE формат: {choices:[{delta:{content/reasoning_content:"..."}}]}
+// DeepSeek использует reasoning_content для цепочки рассуждений
+// ============================================
+class DeepSeekAdapter extends OpenAIAdapter {
+  // DeepSeek уже совместим с OpenAI SSE format
+  // Но использует reasoning_content для thinking
+
+  // DeepSeek-специфичные DOM селекторы
+  static SELECTORS = {
+    input: 'textarea',
+    response: '.ds-markdown',
+    spinner: '[class*="loading"]',
+    done: { type: 'text-buttons', copyText: 'Copy' },
+  };
+}
+
 // === Экспорт в глобальную область видимости ===
 window.IProviderAdapter = IProviderAdapter;
 window.GLMAdapter = GLMAdapter;
 window.OpenAIAdapter = OpenAIAdapter;
+window.QwenAdapter = QwenAdapter;
+window.DeepSeekAdapter = DeepSeekAdapter;
 window.OpenAINormalizer = OpenAINormalizer;
 
 // Автоопределение провайдера и создание адаптера
@@ -293,12 +337,17 @@ const providerKey = host.includes('z.ai') ? 'glm'
                   : host.includes('deepseek') ? 'deepseek'
                   : 'unknown';
 
-window.__currentAdapter = providerKey === 'glm' ? new GLMAdapter() : new OpenAIAdapter();
+const ADAPTER_MAP = {
+  glm: () => new GLMAdapter(),
+  qwen: () => new QwenAdapter(),
+  deepseek: () => new DeepSeekAdapter(),
+};
+window.__currentAdapter = ADAPTER_MAP[providerKey]?.() || new OpenAIAdapter();
 
 ({
   status: 'initialized',
   provider: providerKey,
   adapter: window.__currentAdapter.constructor.name,
-  classes: ['IProviderAdapter', 'GLMAdapter', 'OpenAIAdapter', 'OpenAINormalizer'],
+  classes: ['IProviderAdapter', 'GLMAdapter', 'OpenAIAdapter', 'QwenAdapter', 'DeepSeekAdapter', 'OpenAINormalizer'],
   hint: 'Use: window.__currentAdapter.readFromBuffer() / new OpenAINormalizer().normalizeFull()',
 })
