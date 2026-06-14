@@ -247,27 +247,25 @@
 
     /** Прочитать последний ответ */
     read() {
-      // Приоритет: network buffer → DOM
-      const netTokens = window.__netBuffer?.getLatestTokens();
-      if (netTokens && netTokens.length > 0) {
-        return {
-          text: netTokens,
-          len: netTokens.length,
-          source: 'network',
-          provider: providerKey,
-        };
+      // Приоритет: adapter (network-aware) → network buffer → DOM
+      if (window.__currentAdapter?.readFromBuffer) {
+        const answerText = window.__currentAdapter.getAnswerText();
+        if (answerText && answerText.length > 0) {
+          return { text: answerText, len: answerText.length, source: 'adapter', provider: providerKey };
+        }
       }
 
-      // Fallback на DOM
+      // Fallback: network buffer
+      const netTokens = window.__netBuffer?.getLatestTokens();
+      if (netTokens && netTokens.length > 0) {
+        return { text: netTokens, len: netTokens.length, source: 'network', provider: providerKey };
+      }
+
+      // Fallback: DOM
       const responseEls = findElements(spec.response);
       const last = responseEls[responseEls.length - 1];
       const text = (last?.innerText || '').replace(/^Thought Process\n/, '').trim();
-      return {
-        text,
-        len: text.length,
-        source: 'dom',
-        provider: providerKey,
-      };
+      return { text, len: text.length, source: 'dom', provider: providerKey };
     },
 
     /** Мониторинг прогресса (для Agent Mode) */

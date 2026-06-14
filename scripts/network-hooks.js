@@ -58,7 +58,14 @@
       const chatEntries = this.entries.filter(e =>
         patterns.some(p => e.url.includes(p))
       );
-      return chatEntries[chatEntries.length - 1] || null;
+      const entry = chatEntries[chatEntries.length - 1] || null;
+      
+      // Автопарсинг: если sseTokens пустой но body есть — парсим body
+      if (entry && (!entry.sseTokens || entry.sseTokens.length === 0) && entry.body) {
+        entry.sseTokens = parseSSETokens(entry.body);
+      }
+      
+      return entry;
     },
 
     /** Собрать все SSE-токены из последнего ответа */
@@ -139,22 +146,69 @@
     const response = await originalFetch.apply(this, args);
 
     if (isChatAPI(url)) {
-      // Клонируем response чтобы не потребить body
-      const cloned = response.clone();
-
-      // Асинхронно читаем и парсим
-      cloned.text().then(body => {
-        const sseTokens = parseSSETokens(body);
-        window.__netBuffer.add({
-          url,
-          status: response.status,
-          body: body.slice(0, 10000), // ограничиваем размер
-          sseTokens,
-          timestamp: Date.now(),
-          provider: providerKey,
-          method: 'fetch',
-        });
-      }).catch(() => {}); // silently ignore parse errors
+      // Перехват через ReadableStream tee() — читаем стрим по чанкам
+      const [stream1, stream2] = response.body.tee();
+      
+      // Асинхронно читаем наш стрим и парсим SSE по чанкам
+      const reader = stream2.getReader();
+      const decoder = new TextDecoder();
+      let sseTokens = [];
+      let buffer = '';
+      
+      (async () => {
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            
+            // Парсим полные строки из буфера
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || ''; // Последняя неполная строка остаётся в буфере
+            
+            for (const line of lines) {
+              if (!line.startsWith('data:')) continue;
+              const data = line.slice(5).trim();
+              if (data === '[DONE]') break;
+              try {
+                const json = JSON.parse(data);
+                const glmContent = json?.data?.delta_content;
+                if (glmContent) { sseTokens.push({ text: glmContent, phase: json?.data?.phase || 'answer' }); continue; }
+                const openaiContent = json?.choices?.[0]?.delta?.content || json?.choices?.[0]?.message?.content || '';
+                if (openaiContent) sseTokens.push({ text: openaiContent, phase: 'answer' });
+              } catch { if (data) sseTokens.push({ text: data, phase: 'unknown' }); }
+            }
+            
+            // Обновляем запись в буфере (добавляем токены по мере поступления)
+            const existingEntry = window.__netBuffer.entries.find(e => e.url === url && e.method === 'fetch' && e.timestamp === window.__netBuffer._currentFetchTs);
+            if (existingEntry) {
+              existingEntry.sseTokens = [...sseTokens];
+              existingEntry.body = (existingEntry.body || '') + decoder.decode(value, { stream: true });
+            }
+          }
+          
+          // Финализация — добавляем полную запись в буфер
+          window.__netBuffer.add({
+            url,
+            status: response.status,
+            body: '',
+            sseTokens,
+            timestamp: Date.now(),
+            provider: providerKey,
+            method: 'fetch-stream',
+            complete: true,
+          });
+        } catch (e) {
+          console.warn('[network-hooks] Stream read error:', e.message);
+        }
+      })();
+      
+      // Возвращаем оригинальный стрим
+      return new Response(stream1, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      });
     }
 
     return response;

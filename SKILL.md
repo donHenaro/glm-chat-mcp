@@ -517,6 +517,7 @@ glm-chat-mcp/                     ← https://github.com/donHenaro/glm-chat-mcp
 │   ├── network-hooks.js          ← 🆕 Network interception — перехват fetch/EventSource, SSE-буфер
 │   ├── session-manager.js        ← 🆕 Session persistence — cookies + localStorage
 │   ├── provider-adapter.js       ← 🆕 Унифицированный провайдер-агностик API
+│   ├── provider-adapters.js      ← 🆕 IProviderAdapter + GLMAdapter + OpenAIAdapter + OpenAINormalizer
 │   ├── blob-download.js          ← Blob-перехват (текст + бинарные, try/finally)
 │   ├── progress-monitor.js       ← Мониторинг Agent Mode
 │   └── multi-provider.js         ← Параллельный опрос (rate limit 2с)
@@ -533,12 +534,18 @@ glm-chat-mcp/                     ← https://github.com/donHenaro/glm-chat-mcp
 При первом обращении к провайдеру в сессии:
 1. `browser_evaluate(filename='network-hooks.js')` — установить перехват сети
 2. `browser_evaluate(filename='session-manager.js')` — инициализировать менеджер сессий
-3. `browser_evaluate(filename='provider-adapter.js')` — инициализировать адаптер
+3. `browser_evaluate(filename='provider-adapters.js')` — инициализировать адаптеры (GLMAdapter/OpenAIAdapter + OpenAINormalizer)
+4. `browser_evaluate(filename='provider-adapter.js')` — инициализировать унифицированный API
 
 После инициализации использовать:
 - `browser_evaluate('window.__adapter.observe()')` — полная диагностика состояния
-- `browser_evaluate('window.__adapter.read()')` — чтение ответа (network → DOM)
+- `browser_evaluate('window.__adapter.read()')` — чтение ответа (adapter → network → DOM)
 - `browser_evaluate('window.__adapter.healthCheck()')` — проверка всех систем
+- `browser_evaluate('window.__currentAdapter.readFromBuffer()')` — чтение из буфера через адаптер
+- `browser_evaluate('window.__currentAdapter.getAnswerText()')` — только answer-фаза
+- `browser_evaluate('window.__currentAdapter.getThinkingText()')` — только thinking-фаза
+- `browser_evaluate('new OpenAINormalizer().normalizeFull()')` — полный ответ в OpenAI SSE формате
+- `browser_evaluate('new OpenAINormalizer().toCompletionResponse()')` — полный ответ как OpenAI JSON
 - `browser_evaluate('window.__session.status()')` — статус авторизации
 - `browser_evaluate('window.__netBuffer.stats()')` — статистика перехваченных запросов
 
