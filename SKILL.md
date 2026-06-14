@@ -519,14 +519,17 @@ glm-chat-mcp/                     ← https://github.com/donHenaro/glm-chat-mcp
 │   ├── session-manager.js        ← 🆕 Session persistence — cookies + localStorage
 │   ├── provider-adapter.js       ← 🆕 Унифицированный провайдер-агностик API
 │   ├── provider-adapters.js      ← 🆕 IProviderAdapter + GLMAdapter + OpenAIAdapter + OpenAINormalizer
-│   ├── ai-extract.js             ← 🆕 AI-powered extract fallback — 5 стратегий извлечения
-│   ├── debug-trace.js            ← 🆕 Debug tracing — логирование действий + ошибки + таймеры
-│   ├── multi-provider.js         ← Параллельный опрос (v14: через adapter)
+│   ├── cdp-intercept.js          ← 🆕 WebSocket interception — для WS-based провайдеров
+│   ├── ai-extract.js             ← 🆕 AI-powered extract fallback — 5 стратегий
+│   ├── debug-trace.js            ← 🆕 Debug tracing — логирование + ошибки + таймеры
 │   ├── multi-collect.js          ← 🆕 Сбор ответов multi-provider (adapter → network → ai-extract → DOM)
 │   ├── blob-download.js          ← Blob-перехват (текст + бинарные, try/finally)
 │   └── progress-monitor.js       ← Мониторинг Agent Mode (v14: network-aware)
-├── server/                       ← 🆕 OpenAI-compatible HTTP bridge
-│   └── openai-bridge.js        ← Express + Playwright → /v1/chat/completions
+├── server/                       ← 🆕 OpenAI-compatible HTTP bridge + CloakBrowser MCP
+│   ├── openai-bridge.js          ← Express + Playwright → /v1/chat/completions
+│   ├── cloak-browser-mcp.js      ← 🆕 CloakBrowser MCP server (stdio JSON-RPC)
+│   ├── package-cloak.json        ← CloakBrowser dependencies
+│   └── README.md                 ← 🆕 Server documentation
 ├── package.json                 ← 🆕 Node.js dependencies (express, playwright)
 ├── plans/                        ← планы развития (анализ аналогов и т.д.)
 ├── log/                          ← логи чатов
