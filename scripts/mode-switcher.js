@@ -41,7 +41,8 @@
     },
     deepseek: {
       fast:      { action: 'click', find: () => Array.from(document.querySelectorAll('*')).find(el => el.textContent?.trim() === 'Быстрый режим' || el.textContent?.trim() === 'Fast') },
-      deepThink: { action: 'click', find: () => Array.from(document.querySelectorAll('*')).find(el => el.textContent?.trim() === 'Глубокое мышление' || el.textContent?.trim() === 'Deep Think') },
+      deepThink: { action: 'click', find: () => Array.from(document.querySelectorAll('*')).find(el => el.textContent?.trim() === 'Глубокое мышление' || el.textContent?.trim() === 'Deep Think'), note: 'DeepSeek-R1 reasoning model' },
+      r1:        { action: 'click', find: () => Array.from(document.querySelectorAll('*')).find(el => el.textContent?.trim() === 'Глубокое мышление' || el.textContent?.trim() === 'Deep Think'), note: 'Alias for deepThink — activates DeepSeek-R1' },
       search:    { action: 'click', find: () => Array.from(document.querySelectorAll('*')).find(el => el.textContent?.trim() === 'Умный поиск' || el.textContent?.trim() === 'Search') },
     },
     kimi: {
@@ -53,6 +54,10 @@
       sheets:       { action: 'sidebar', label: 'Sheets', find: () => { const el = Array.from(document.querySelectorAll('.agent-label')).find(e => e.textContent?.trim() === 'Sheets'); return el?.closest('.agent-info') || el?.parentElement || el; } },
       kimiCode:     { action: 'sidebar', label: 'Kimi Code', find: () => document.querySelector('.nav-item.kfc-item') },
       claw:         { action: 'slash', label: 'Kimi Claw', slashName: 'deep-research', find: () => document.querySelector('.skill-item'), note: 'Kimi Claw = поиск, активируется через slash-команду или кнопку 🔍' },
+      // Model switching (K2.6 variants)
+      thinking:     { action: 'model', label: 'K2.6 Thinking', find: () => Array.from(document.querySelectorAll('*')).find(e => e.textContent?.trim() === 'K2.6 Thinking' && e.children.length === 0), note: 'Deep thinking for complex questions' },
+      agentModel:   { action: 'model', label: 'K2.6 Agent', find: () => Array.from(document.querySelectorAll('*')).find(e => e.textContent?.trim() === 'K2.6 Agent' && e.children.length === 0), note: 'Research agent mode' },
+      instant:      { action: 'model', label: 'K2.6 Instant', find: () => Array.from(document.querySelectorAll('*')).find(e => e.textContent?.trim() === 'K2.6 Instant' && e.children.length === 0), note: 'Quick response (default)' },
       // Slash-команды (через / в input)
       'slash-deep-research': { action: 'slash', label: '/deep-research', slashName: 'deep-research', find: () => document.querySelector('.skill-item') },
       'slash-docx':         { action: 'slash', label: '/docx', slashName: 'docx', find: () => document.querySelector('.skill-item') },
@@ -82,6 +87,20 @@
           return { switched: true, provider, mode: name, method: 'sidebar', label: mode.label };
         }
         return { error: 'not_found', provider, mode: name, label: mode.label };
+      }
+
+      if (mode.action === 'model') {
+        // Model switching (Kimi K2.6 variants): click model label element
+        // First open model popup by clicking current model label
+        const currentModel = document.querySelector('[class*="k-model"], [class*="model-switch"]') ||
+          Array.from(document.querySelectorAll('*')).find(e => e.textContent?.trim()?.match(/^K[\d.]+\s+\w+$/) && e.children.length === 0);
+        if (currentModel) currentModel.click();
+        // Then find and click the target model
+        setTimeout(() => {
+          const el = mode.find();
+          if (el) el.click();
+        }, 500);
+        return { switched: true, provider, mode: name, method: 'model', label: mode.label, note: mode.note };
       }
 
       if (mode.action === 'slash') {

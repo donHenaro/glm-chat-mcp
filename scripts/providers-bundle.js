@@ -1,6 +1,6 @@
 /**
  * scripts/providers-bundle.js — AUTO-GENERATED, DO NOT EDIT
- * Build: 2026-06-14T20:07:06.434Z
+ * Build: 2026-06-14T20:19:32.114Z
  * 
  * Bundle of all provider modules for browser_evaluate injection.
  * Вызов: browser_evaluate(filename='providers-bundle.js')
@@ -54,6 +54,12 @@
     glm: {
       name: 'GLM',
       baseUrl: 'https://chat.z.ai',
+      models: {
+        default: 'GLM-5.1',
+        available: ['GLM-5.1', 'GLM-5'],
+        mostPowerful: 'GLM-5.1',
+        selector: 'button.modelSelectorButton',
+      },
       chatPattern: '/c/',
       input: {
         primary: '#chat-input',
@@ -86,6 +92,12 @@
     qwen: {
       name: 'Qwen',
       baseUrl: 'https://chat.qwen.ai',
+      models: {
+        default: 'Qwen3.7-Plus',
+        available: ['Qwen3.7-Plus'],
+        mostPowerful: 'Qwen3.7-Plus',
+        selector: '.index-module__model-selector___rdCim',
+      },
       chatPattern: '/c/',
       input: {
         primary: 'textarea.message-input-textarea',
@@ -117,6 +129,13 @@
     deepseek: {
       name: 'DeepSeek',
       baseUrl: 'https://chat.deepseek.com',
+      models: {
+        default: 'DeepSeek-V3',
+        available: ['DeepSeek-V3', 'DeepSeek-R1'],
+        mostPowerful: 'DeepSeek-R1',
+        selector: null, // Нет отдельного selector — R1 = DeepThink mode
+        note: 'R1 активируется через mode-switcher (Глубокое мышление)',
+      },
       chatPattern: '/a/chat/s/',
       sendMode: 'button', // DeepSeek: нужна кнопка отправки, Enter не работает
       input: {
@@ -149,6 +168,13 @@
     kimi: {
       name: 'Kimi',
       baseUrl: 'https://www.kimi.com',
+      models: {
+        default: 'K2.6 Instant',
+        available: ['K2.6 Instant', 'K2.6 Thinking', 'K2.6 Agent'],
+        mostPowerful: 'K2.6 Thinking',
+        selector: null, // Переключение через popup-меню
+        note: 'K2.6 Thinking = deep thinking, K2.6 Agent = research agent',
+      },
       chatPattern: '/chat/',
       input: {
         type: 'contenteditable',
