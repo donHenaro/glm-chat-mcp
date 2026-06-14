@@ -1,10 +1,10 @@
 {
   "name": "glm-chat-mcp",
-"version": "15.0.0",
+"version": "15.1.0",
   "author": "VeAI Community",
   "license": "MIT",
   "keywords": [
-    "glm", "glm-5", "qwen", "deepseek", "chat", "mcp",
+"glm", "glm-5", "qwen", "deepseek", "kimi", "chat", "mcp",
     "playwright", "browser-automation", "veai", "intellij",
     "agent-mode", "file-transfer", "blob-download",
     "network-hooks", "sse-streaming", "session-persistence", "stealth"

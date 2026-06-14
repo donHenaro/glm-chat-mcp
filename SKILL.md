@@ -108,9 +108,31 @@ glm-chat-mcp/
 
 ---
 
+## ✅ Provider Status
+
+| Provider | Send | Network (SSE) | DOM | Input Type | API Endpoint |
+|----------|------|---------------|-----|------------|-------------|
+| **GLM** | ✅ | ✅ 18-492 tok | ✅ | textarea | `/api/v2/chat/completions` |
+| **Qwen** | ✅ | ✅ 1-30 tok | ✅ | textarea | `/api/v2/chat/completions` |
+| **DeepSeek** | ✅ | ⚠️ re-override | ✅ | textarea | `/api/v0/chat/completion` |
+| **Kimi** | ✅ | ❌ gRPC | ✅ | contenteditable | gRPC-web |
+
+---
+
 ## 📝 Changelog
 
-### v15.0.0 (current) — P3 Complete: E2E + Function Calling + Token Accuracy
+### v15.1.0 (current) — Multi-Provider Testing: GLM ✅ Qwen ✅ DeepSeek ✅ Kimi ✅
+
+- 🆕 Kimi adapter: contenteditable input, gRPC (DOM-only), `.chat-input-editor`
+- 🆕 Contenteditable support in `humanInput()`: `execCommand('insertText')` for React/Vue
+- 🆕 Real API patterns from testing: GLM=`/api/v2/chat/completions`, Qwen=same, DeepSeek=`/api/v0/chat/completion`, Kimi=gRPC
+- 🆕 All 4 providers tested: short answer + long answer, send/read cycles
+- 🆕 `docs/plans/provider-testing-results.md` — full test results
+- ⚠️ Kimi: network hooks don't work (gRPC), DOM fallback only
+- ⚠️ DeepSeek: SPA caches fetch, needs re-override after page load
+- ⚠️ Qwen/GLM: navigation destroys scripts, needs `addInitScript` for production
+
+### v15.0.0 — P3 Complete: E2E + Function Calling + Token Accuracy
 
 - 🆕 E2E test suite: 11/11 tests pass (`server/test-e2e.js`)
 - 🆕 Real chat completion via CDP: prompt→GLM→response in OpenAI format
