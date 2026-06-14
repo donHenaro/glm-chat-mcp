@@ -514,10 +514,12 @@ glm-chat-mcp/                     ← https://github.com/donHenaro/glm-chat-mcp
 ├── reference.md                  ← техническая справка API провайдеров
 ├── scripts/                      ← JS-скрипты для browser_evaluate
 │   ├── response.js               ← Response Detection + чтение + healthCheck (v14: network priority)
+│   ├── hooks-auto-init.js        ← 🆕 Единая точка входа — auto-init hooks + trace + adapters
 │   ├── network-hooks.js          ← 🆕 Network interception — перехват fetch/EventSource, SSE-буфер
 │   ├── session-manager.js        ← 🆕 Session persistence — cookies + localStorage
 │   ├── provider-adapter.js       ← 🆕 Унифицированный провайдер-агностик API
 │   ├── provider-adapters.js      ← 🆕 IProviderAdapter + GLMAdapter + OpenAIAdapter + OpenAINormalizer
+│   ├── debug-trace.js            ← 🆕 Debug tracing — логирование действий + ошибки + таймеры
 │   ├── blob-download.js          ← Blob-перехват (текст + бинарные, try/finally)
 │   ├── progress-monitor.js       ← Мониторинг Agent Mode
 │   └── multi-provider.js         ← Параллельный опрос (rate limit 2с)
@@ -532,10 +534,13 @@ glm-chat-mcp/                     ← https://github.com/donHenaro/glm-chat-mcp
 
 ### 🆕 Порядок инициализации (v14.0)
 При первом обращении к провайдеру в сессии:
-1. `browser_evaluate(filename='network-hooks.js')` — установить перехват сети
-2. `browser_evaluate(filename='session-manager.js')` — инициализировать менеджер сессий
-3. `browser_evaluate(filename='provider-adapters.js')` — инициализировать адаптеры (GLMAdapter/OpenAIAdapter + OpenAINormalizer)
-4. `browser_evaluate(filename='provider-adapter.js')` — инициализировать унифицированный API
+1. `browser_evaluate(filename='hooks-auto-init.js')` — 🆕 **Единая точка входа** — автоматически:
+   - Устанавливает network hooks (fetch/EventSource перехват)
+   - Инициализирует debug trace
+   - Инициализирует адаптеры (если provider-adapters.js загружен)
+2. `browser_evaluate(filename='provider-adapters.js')` — если нужны адаптеры (GLMAdapter/OpenAINormalizer)
+3. `browser_evaluate(filename='provider-adapter.js')` — если нужен унифицированный API
+4. `browser_evaluate(filename='session-manager.js')` — если нужна session persistence
 
 После инициализации использовать:
 - `browser_evaluate('window.__adapter.observe()')` — полная диагностика состояния
@@ -621,16 +626,27 @@ spring.jpa.hibernate.ddl-auto=validate.
 
 ### v14.0.0 (current) — Network Intelligence Edition
 **По анализу аналогов (Chat2API, WebModel, CloakBrowser, Stagehand, Steel.dev):**
+- 🆕 `hooks-auto-init.js` — единая точка входа, auto-init hooks + trace + adapters
 - 🆕 `network-hooks.js` — перехват fetch/EventSource, SSE-буфер, парсинг токенов
 - 🆕 `session-manager.js` — persistent sessions через cookies/localStorage
 - 🆕 `provider-adapter.js` — унифицированный провайдер-агностик API (observe/send/read)
+- 🆕 `provider-adapters.js` — IProviderAdapter + GLMAdapter + OpenAIAdapter + OpenAINormalizer
+- 🆕 `debug-trace.js` — логирование действий + ошибки + таймеры
 - `response.js` v14: network buffer как приоритетный источник перед DOM-селекторами
 - `response.js` v14: healthCheck() теперь проверяет network hooks + session manager
-- `extractLastResponse()` возвращает `source: 'network'|'dom'`
+- `extractLastResponse()` возвращает `source: 'adapter'|'network'|'dom'`
 - SKILL.md: обновлена иерархия надёжности (network buffer = приоритет 0)
 - SKILL.md: добавлен раздел CloakBrowser (опциональный stealth)
-- SKILL.md: добавлен порядок инициализации v14.0
+- SKILL.md: hooks-auto-init.js как единая точка входа
 - Анализ аналогов: `plans/Аналоги_glm-chat-mcp_и_Playwright_фичи_v1.txt`
+
+**Протестировано в браузере (chat.z.ai):**
+- ✅ 37 SSE токенов распарсено из /api/v2/chat/completions
+- ✅ GLM SSE формат: {type:chat:completion, data:{delta_content, phase:thinking|answer}}
+- ✅ answerText + thinkingText извлекаются корректно
+- ✅ OpenAINormalizer: 8272 байт в OpenAI SSE формате
+- ✅ Полный пайплайн: GLM SSE → hooks → body → auto-parse → adapter → normalizer → OpenAI SSE
+- ✅ CloakBrowser подтверждён: 26K⭐, npm v0.3.31, 58 C++ патчей
 
 ### v13.1.0 — Bugfix + Merge
 **Fixed (по замечаниям GLM + Qwen + DeepSeek):**
