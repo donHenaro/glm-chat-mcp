@@ -67,8 +67,83 @@ let browser = null;
 let contexts = {};   // provider -> BrowserContext
 let sessions = {};   // sessionId -> { page, provider, lastUsed, messages }
 
+// === Response Cache ===
+const CACHE_ENABLED = process.env.CACHE !== 'false'; // default: enabled
+const CACHE_TTL_MS = parseInt(process.env.CACHE_TTL || '300000', 10); // 5 min
+const responseCache = {}; // hash -> { response, timestamp }
+
+function cacheHash(model, messages) {
+  const lastUserMsg = messages.filter(m => m.role === 'user').pop()?.content || '';
+  const key = `${model}:${lastUserMsg}`;
+  // Simple hash (djb2)
+  let hash = 5381;
+  for (let i = 0; i < key.length; i++) hash = ((hash << 5) + hash) + key.charCodeAt(i);
+  return hash.toString(36);
+}
+
+function cacheGet(hash) {
+  if (!CACHE_ENABLED) return null;
+  const entry = responseCache[hash];
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > CACHE_TTL_MS) { delete responseCache[hash]; return null; }
+  return entry.response;
+}
+
+function cacheSet(hash, response) {
+  if (!CACHE_ENABLED) return;
+  responseCache[hash] = { response, timestamp: Date.now() };
+  // Evict old entries if cache too large
+  const keys = Object.keys(responseCache);
+  if (keys.length > 100) {
+    const oldest = keys.reduce((a, b) => responseCache[a].timestamp < responseCache[b].timestamp ? a : b);
+    delete responseCache[oldest];
+  }
+}
+
 const app = express();
 app.use(express.json());
+
+// === API Authentication ===
+const API_KEYS = (process.env.API_KEYS || '').split(',').map(k => k.trim()).filter(Boolean);
+const AUTH_ENABLED = API_KEYS.length > 0;
+
+if (AUTH_ENABLED) {
+  console.log(`[bridge] ✓ API auth enabled (${API_KEYS.length} keys)`);
+  app.use('/v1', (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const bearer = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    const queryKey = req.query?.key;
+    const key = bearer || queryKey;
+    if (!key || !API_KEYS.includes(key)) {
+      return res.status(401).json({ error: { message: 'Invalid API key', type: 'authentication_error', code: 'invalid_api_key' } });
+    }
+    next();
+  });
+} else {
+  console.log('[bridge] ⚠ API auth disabled (set API_KEYS env to enable)');
+}
+
+// === Rate Limiting ===
+const RATE_LIMIT_WINDOW = parseInt(process.env.RATE_LIMIT_WINDOW || '60000', 10); // 1 min
+const RATE_LIMIT_MAX = parseInt(process.env.RATE_LIMIT_MAX || '30', 10); // 30 req/min
+const rateLimitCounts = {}; // key -> {count, resetAt}
+
+app.use('/v1/chat/completions', (req, res, next) => {
+  if (!AUTH_ENABLED) return next(); // rate limit only with auth
+  const key = (req.headers['authorization']?.slice(7)) || req.query?.key || 'anonymous';
+  const now = Date.now();
+  if (!rateLimitCounts[key] || now > rateLimitCounts[key].resetAt) {
+    rateLimitCounts[key] = { count: 0, resetAt: now + RATE_LIMIT_WINDOW };
+  }
+  rateLimitCounts[key].count++;
+  res.setHeader('X-RateLimit-Limit', RATE_LIMIT_MAX);
+  res.setHeader('X-RateLimit-Remaining', Math.max(0, RATE_LIMIT_MAX - rateLimitCounts[key].count));
+  res.setHeader('X-RateLimit-Reset', Math.ceil(rateLimitCounts[key].resetAt / 1000));
+  if (rateLimitCounts[key].count > RATE_LIMIT_MAX) {
+    return res.status(429).json({ error: { message: 'Rate limit exceeded', type: 'rate_limit_error', code: 'rate_limit_exceeded' } });
+  }
+  next();
+});
 
 // === CDP Auto-Discovery ===
 async function discoverCDP() {
@@ -159,6 +234,17 @@ app.post('/v1/chat/completions', async (req, res) => {
   const prompt = typeof lastUserMsg.content === 'string' ? lastUserMsg.content : JSON.stringify(lastUserMsg.content);
 
   console.log(`[bridge] Request: model=${model}, prompt=${prompt.slice(0, 100)}...`);
+
+  // Check cache (non-streaming only)
+  if (!stream) {
+    const hash = cacheHash(model, messages);
+    const cached = cacheGet(hash);
+    if (cached) {
+      console.log(`[bridge] Cache hit: ${hash}`);
+      cached.cached = true;
+      return res.json(cached);
+    }
+  }
 
   try {
     // Get or create browser context for this provider
@@ -306,7 +392,7 @@ app.post('/v1/chat/completions', async (req, res) => {
           if (state.complete && answerText.length > 0) break;
         }
 
-        res.json({
+        const response = {
           id: chatId,
           object: 'chat.completion',
           created: Math.floor(Date.now() / 1000),
@@ -321,7 +407,12 @@ app.post('/v1/chat/completions', async (req, res) => {
             finish_reason: 'stop',
           }],
           usage: { prompt_tokens: 0, completion_tokens: answerText.length, total_tokens: answerText.length },
-        });
+        };
+
+        // Cache the response
+        cacheSet(cacheHash(model, messages), response);
+
+        res.json(response);
       }
     } finally {
       // Don't close page if session exists (reuse for conversation)
@@ -333,6 +424,25 @@ app.post('/v1/chat/completions', async (req, res) => {
     }
   } catch (error) {
     console.error('[bridge] Error:', error.message);
+
+    // Auto-Retry: try fallback provider if available
+    const RETRY_PROVIDERS = {
+      'glm-5.1': 'deepseek',
+      'glm-5': 'deepseek',
+      'glm-4': 'deepseek',
+      'qwen3': 'glm-5.1',
+      'deepseek': 'glm-5.1',
+      'deepseek-chat': 'glm-5.1',
+    };
+    const fallbackModel = RETRY_PROVIDERS[model];
+    if (fallbackModel && !req._retried) {
+      console.log(`[bridge] Retrying with fallback model: ${fallbackModel}`);
+      req._retried = true;
+      req.body.model = fallbackModel;
+      req.body._retried = true;
+      return app.handle(req, res); // retry internally
+    }
+
     if (!res.headersSent) {
       res.status(500).json({ error: { message: error.message, type: 'server_error' } });
     } else {

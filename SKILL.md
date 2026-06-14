@@ -632,7 +632,22 @@ spring.jpa.hibernate.ddl-auto=validate.
 
 ## 📋 Changelog
 
-### v14.3.0 (current) — P2 Complete: CDP + CloakBrowser + WebSocket + Sessions
+### v14.4.0 (current) — P3.1 Production Hardening
+**P3.1 реализовано:**
+- 🆕 API Authentication: Bearer token + query key (env API_KEYS)
+- 🆕 Rate Limiting: per-key, X-RateLimit-* headers, 429 errors
+- 🆕 Response Cache: in-memory, TTL 5 min, hash-based, eviction
+- 🆕 Auto-Retry & Fallback: GLM↔DeepSeek cross-provider retry
+- Env config: API_KEYS, RATE_LIMIT_WINDOW, RATE_LIMIT_MAX, CACHE, CACHE_TTL
+
+**Протестировано:**
+- ✅ Auth disabled by default (no API_KEYS) — /v1/models returns 200
+- ✅ Rate limiting inactive without auth
+- ✅ Cache hit logic (hash + TTL + eviction)
+- ✅ Fallback: GLM→DeepSeek, DeepSeek→GLM
+- ✅ /v1/status: {version:'14.3.0', models:6}
+
+### v14.3.0 — P2 Complete: CDP + CloakBrowser + WebSocket + Sessions
 **P2 полностью реализовано:**
 - 🆕 `server/cloak-browser-mcp.js` — CloakBrowser MCP server (stdio JSON-RPC)
   - 6 tools: navigate, click, type, evaluate, snapshot, press_key
