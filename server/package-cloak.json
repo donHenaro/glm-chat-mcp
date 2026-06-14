@@ -1,0 +1,26 @@
+{
+  "name": "cloak-browser-mcp",
+  "version": "1.0.0",
+  "description": "CloakBrowser MCP server — stealth browser automation via MCP protocol (drop-in replacement for @anthropic-ai/mcp-server-playwright)",
+  "main": "cloak-browser-mcp.js",
+  "scripts": {
+    "start": "node cloak-browser-mcp.js",
+    "mcp": "node cloak-browser-mcp.js"
+  },
+  "dependencies": {
+    "cloakbrowser": "^0.3.31",
+    "@anthropic-ai/sdk": "^0.39.0"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.49.0"
+  },
+  "keywords": [
+    "mcp",
+    "cloakbrowser",
+    "playwright",
+    "stealth",
+    "browser-automation",
+    "ai"
+  ],
+  "license": "MIT"
+}

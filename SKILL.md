@@ -1,362 +1,200 @@
 ---
 name: "glm-chat-mcp"
 schemaVersion: "v1.0"
-description: "MANDATORY ACTIVATION when user says: 'zai', 'спроси glm', 'спроси у glm', 'ask glm', 'проконсультируйся с glm', 'обсуди с qwen', 'ask qwen', 'qwen'. Send requests to GLM chat at chat.z.ai or Qwen chat at chat.qwen.ai through Playwright browser tools. Works with VeAI plugin for IntelliJ IDEA."
+description: "MANDATORY ACTIVATION when user says: 'zai', 'спроси glm', 'ask glm', 'обсуди с qwen', 'ask qwen', 'спроси deepseek', 'ask deepseek', 'deepseek'. GLM/Qwen/DeepSeek chat skill with Copy/Regenerate detection. Works with VeAI plugin for IntelliJ IDEA."
 agent: null
 used-by:
  - "Agent"
  - "Code"
 ---
 # when refactoring, never make changes above this line.
-# GLM Chat MCP Skill v5.2
+# GLM Chat MCP Skill v15.0 — Network Intelligence + OpenAI Bridge
 ---
 
-## 🔴 ОБЯЗАТЕЛЬНАЯ АКТИВАЦИЯ
-
-### Провайдер GLM (ZhiPu AI)
-**Триггеры RU:**  `спроси glm`, `спроси у glm`, `zai`, `проконсультируйся с glm`, `что скажет glm`, `java эксперт`, `spring эксперт`, `glm-4.7`, `glm-5`, `реализуй`, `создай`, `напиши код`, `сгенерируй`
-**Триггеры EN:** `ask glm`, `consult glm`, `java expert`, `implement`, `generate code`, `zai`
-
-### Провайдер Qwen (Alibaba)
-**Триггеры RU:** `обсуди с qwen`, `спроси qwen`, `проконсультируйся с qwen`, `qwen`
-**Триггеры EN:** `ask qwen`, `consult qwen`, `qwen expert`, `qwen`
-
-⛔ ЗАПРЕЩЕНО создавать .js файлы для работы с браузером — использовать только Playwright MCP инструменты напрямую  
-⛔ ЗАПРЕЩЕНО закрывать браузер после консультации  
-⛔ ЗАПРЕЩЕНО пробовать один и тот же элемент повторно если он уже сработал  
-✅ Браузер и чат уже открыты — сначала проверить текущее состояние, не переоткрывать без причины
+GLM Chat MCP is a browser-automation skill for consulting GLM, Qwen, and DeepSeek chat providers via Playwright. It intercepts SSE responses at the network level (fetch/EventSource hooks), provides a unified provider-adapter API, and exposes an OpenAI-compatible HTTP bridge (`/v1/chat/completions`, `/v1/models`) for programmatic access. Detailed docs: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · [docs/API.md](docs/API.md)
 
 ---
 
-## ⚡ ГЛАВНОЕ ПРАВИЛО: КАК РАБОТАТЬ С БРАУЗЕРОМ
+## 🔴 Обязательная активация
 
-Агент работает с браузером **напрямую через Playwright MCP инструменты**:
+| Провайдер | Триггеры |
+|-----------|----------|
+| **GLM** | `zai`, `спроси glm`, `ask glm`, `реализуй`, `создай`, `агент`, `исследуй`, `agent` |
+| **Qwen** | `qwen`, `спроси qwen`, `ask qwen`, `обсуди с qwen` |
+| **DeepSeek** | `deepseek`, `спроси deepseek`, `ask deepseek` |
+| **Kimi** | `kimi`, `спроси kimi`, `ask kimi` |
+| **Все** | `спроси всех`, `обсуди со всеми`, `мнение экспертов`, `консенсус`, `все провайдеры` |
 
-- `browser_snapshot` — получить текущее состояние страницы (accessibility tree)
-- `browser_navigate` — перейти по URL
-- `browser_click` — кликнуть по элементу
-- `browser_type` — ввести текст
-- `browser_press_key` — нажать клавишу
-- `browser_evaluate` — выполнить JS прямо в странице
-- `browser_take_screenshot` — скриншот
-- `browser_upload_file` — загрузить файл
-- `browser_wait_for` — ждать условия
+### Режимные триггеры (после активации провайдера)
 
-**НЕ создавать файлы** `*.js`, `*.ts`, `*.sh` для взаимодействия с браузером.  
-**НЕ пытаться запускать** node/npm скрипты для отправки сообщений.  
-Всё делается через инструменты выше — напрямую, здесь и сейчас.
+| Режим | Триггеры | Провайдер |
+|-------|----------|-----------|
+| **DeepThink** | `подумай глубоко`, `deep think`, `глубокое мышление` | GLM, Qwen, DeepSeek |
+| **Agent Mode** | `agent mode`, `агент режим`, `выполни` | GLM, Kimi |
+| **Web Search** | `поиск в интернете`, `web search`, `найди в сети` | GLM, DeepSeek, Qwen, Kimi(Claw) |
+| **Deep Research** | `глубокое исследование`, `deep research`, `исследуй тему` | Kimi |
+| **Agent Swarm** | `agent swarm`, `рой агентов`, `мультиагент` | Kimi |
+| **Slides/PPT** | `создай презентацию`, `make slides`, `ppt` | Kimi, GLM(AI PPT) |
+| **Websites** | `создай сайт`, `make website`, `html` | Kimi |
+| **Docs** | `анализ документа`, `проанализируй файл`, `docs` | Kimi |
+| **Sheets** | `создай таблицу`, `make spreadsheet`, `csv` | Kimi |
+| **Kimi Code** | `kimi code`, `код агент`, `code cli` | Kimi (отдельная страница kimi.com/code, модель K2.7 Code) |
+| **/deep-research** | `/deep-research`, `слеш исследование` | Kimi (slash-команда, 10+ итераций) |
+| **/docx** | `/docx`, `создай docx`, `word документ` | Kimi (slash → генерация .docx) |
+| **/pdf** | `/pdf`, `создай pdf` | Kimi (slash → генерация PDF) |
+| **/xlsx** | `/xlsx`, `создай xlsx`, `excel таблица` | Kimi (slash → генерация .xlsx) |
 
----
-
-## 🔄 Workflow — Пошаговые действия
-
-### Шаг 0. Определить провайдера по триггеру
-- Если триггер содержит `glm`, `zai` → использовать GLM провайдер
-- Если триггер содержит `qwen` → использовать Qwen провайдер
-- Если не указан → по умолчанию GLM
-
-### Шаг 1. Проверить текущее состояние
-
-Вызвать `browser_snapshot`. По результату определить провайдера и состояние:
-
-#### Для GLM:
-- URL содержит `chat.z.ai/c/[UUID]` → уже в чате GLM
-- URL = `https://chat.z.ai/` → пустой новый чат GLM
-- Другой URL или браузер закрыт → перейти на `https://chat.z.ai/`
-
-#### Для Qwen:
-- URL содержит `chat.qwen.ai/c/[UUID]` → уже в чате Qwen
-- URL = `https://chat.qwen.ai/` → пустой новый чат Qwen
-- Другой URL или браузер закрыт → перейти на `https://chat.qwen.ai/`
-
-Если поле ввода видно и чат открыт — **не делать лишних навигаций**.
-
-### Шаг 2. Проверить лог предыдущих чатов
-
-Открыть файл: `log/YYYY-MM-DD/glm-chat-log-YYYY-MM-DD.md`  
-Если найден чат по теме — перейти через `browser_navigate` на `https://chat.z.ai/c/[UUID]`  
-Если нет — остаться в текущем или новом чате.
-
-### Шаг 3. Выбрать режим (если нужно)
-
-Сделать `browser_snapshot`, найти кнопки режимов и кликнуть нужную (см. раздел РЕЖИМЫ).
-
-### Шаг 4. Ввести сообщение
-
-- `browser_click` на поле ввода (textarea или `#chat-input`)
-- `browser_type` — напечатать сообщение
-- `browser_click` на кнопку отправки **ИЛИ** `browser_press_key` → `Enter`
-
-### Шаг 5. Ждать ответа
-
-Периодически вызывать `browser_snapshot`.  
-Пока в дереве есть кнопка **Stop** или элемент **thinking** — GLM ещё думает, ждать.  
-Когда Stop исчез и появились кнопки **Copy / Regenerate** — ответ готов.
-
-### Шаг 6. Прочитать ответ
-
-`browser_snapshot` — найти последний блок сообщения ассистента, прочитать текст.  
-Если нужен код — найти блоки `pre code` в дереве.
-
-### Шаг 7. Записать UUID
-
-Посмотреть текущий URL через snapshot или navigate.  
-Если URL = `https://chat.z.ai/c/[UUID]` — сохранить UUID в лог.
+⛔ Не закрывать браузер после консультации
+✅ Браузер уже открыт — сначала проверить состояние
+📁 JS-скрипты в `scripts/` — загружать через `read_file` → `browser_evaluate`
 
 ---
 
-## 🧠 Запоминание успешных действий
+## 🔄 Workflow — 8 шагов
 
-**Если действие с элементом сработало — запомнить и больше не пробовать другие варианты для того же элемента.**
-
-Например: если `browser_type` в `textarea` сработал → использовать именно его в следующий раз.  
-Не перебирать заново `#chat-input`, `div[contenteditable]` и т.д., если уже найден рабочий вариант.
-
-Если элемент не найден в snapshot — сделать ещё один snapshot (страница могла измениться), но **не создавать JS-файл**.
-
----
-
-## 🌐 Навигация
-
-### Провайдер GLM (ZhiPu AI)
-| Действие | Как |
-|----------|-----|
-| Открыть новый чат | `browser_navigate` → `https://chat.z.ai/` |
-| Перейти в чат по UUID | `browser_navigate` → `https://chat.z.ai/c/[UUID]` |
-| Проверить текущий URL | `browser_snapshot` — URL в заголовке дерева |
-| Нажать "New Chat" | `browser_snapshot` найти кнопку "New Chat" → `browser_click` |
-
-### Провайдер Qwen (Alibaba)
-| Действие | Как |
-|----------|-----|
-| Открыть новый чат | `browser_navigate` → `https://chat.qwen.ai/` |
-| Перейти в чат по UUID | `browser_navigate` → `https://chat.qwen.ai/c/[UUID]` |
-| Проверить текущий URL | `browser_snapshot` — URL в заголовке дерева |
-| Нажать "New Chat" | `browser_snapshot` найти кнопку "New Chat" → `browser_click` |
+1. **Определить провайдера и режим** — Триггер → провайдер. Agent Mode триггеры: `найди`, `проанализируй`, `выполни код`, `исследуй`, `agent`
+2. **Проверить лог, найти существующий чат** — `log/YYYY-MM-DD/<provider>-chat-log-YYYY-MM-DD.md`
+3. **Переключиться на вкладку провайдера** — GLM: `chat.z.ai`, Qwen: `chat.qwen.ai`, DeepSeek: `chat.deepseek.com`, Kimi: `kimi.com`
+4. **Выбрать режим** — `browser_evaluate('window.__modeSwitch.switch("deepThink")')` или `browser_evaluate(filename='mode-switcher.js')` → `window.__modeSwitch.switch("agentSwarm")`
+5. **Загрузить файл (если нужно)** — `page.$('input[type="file"]').setInputFiles(path)` (GLM/Qwen/DeepSeek)
+6. **Отправить сообщение** — `browser_click` textarea → `browser_type` → `browser_press_key` Enter
+7. **Ожидание ответа** — Фаза 1: spinner/Stop (0-15с). Фаза 2: 2+ SVG-кнопки стабильны 3 сек
+8. **Прочитать ответ** — `browser_evaluate('window.__adapter.read()')` → `{ done, textLen, text, source, provider }`
 
 ---
 
-## 🎮 Элементы управления — что искать в snapshot
-
-Все элементы ищутся в accessibility tree через `browser_snapshot`.
-
-### Общие элементы (работают для обоих провайдеров):
-**Поле ввода** — textarea или элемент с role=textbox, placeholder "Send a message" или "How can I help"
-**Кнопка Send** — button с названием "Send" или иконкой стрелки (type=submit)
-**Кнопка Stop** — button с названием "Stop" — видна пока модель генерирует
-**New Chat** — button "New Chat" или ссылка на "/"
-**Upload файла** — button "Upload" или в меню, после клика появляется input[type=file]
-**История чатов** — левая боковая панель, список элементов с названиями диалогов
-
-### Специфичные для GLM:
-**Переключатель модели** — button с текстом "GLM-5.1", "GLM-5", "GLM-5-Turbo", "GLM-4.7" или выпадающий список
-**Agent Mode** — button "Agent" или с aria-label "Agent"
-**Deep Think** — button "Deep think"
-**Меню "+"** — button "More" или "Add" — открывает меню инструментов
-**Web Search** — в меню "+" пункт "Search" или "联网搜索"
-**Индикатор thinking** — элемент с текстом "thinking" или классом thinking
-**Кнопки после ответа** — "Copy", "Regenerate"
-
-### Специфичные для Qwen:
-**Переключатель модели** — button с текстом "Qwen2.5" или выпадающий список
-**Web Search** — toggle button или checkbox для включения веб-поиска
-**Индикатор генерации** — анимация или текст "Generating..."
-**Кнопки после ответа** — "Copy", "Regenerate", "Thumbs up/down"
-
----
-
-## ⏳ Ожидание ответа GLM — признаки
-
-**GLM ещё думает (ЖДАТЬ):**
-- В snapshot видна кнопка **Stop**
-- В snapshot виден элемент **thinking**
-- Кнопок **Copy** и **Regenerate** ещё нет
-
-**Ответ готов (ЧИТАТЬ):**
-- Кнопка **Stop** исчезла из snapshot
-- Элемент **thinking** исчезла из snapshot
-- Появились кнопки **Copy** и/или **Regenerate**
-
-**Таймаут ожидания:** не более 3 минут. Делать snapshot каждые 10-15 секунд.
-
----
-
-## 🔀 Переключение модели
-
-1. Если уже в чате — сначала `browser_click` на "New Chat" (смена модели только в новом чате)
-2. Дождаться загрузки нового чата (snapshot покажет пустой чат)
-3. Если появилось модальное окно с выбором модели — `browser_click` на "GLM-5.1"
-4. Если модального окна нет — найти через snapshot кнопку с текстом текущей модели, кликнуть, выбрать нужную
-
-**Приоритет:** GLM-5.1 → GLM-5 → GLM-5-Turbo → GLM-4.7
-
----
-
-## 🤖 Режимы провайдеров
-
-### GLM режимы
-
-| Тип запроса | Режим |
-|-------------|-------|
-| "найди", "актуальная версия", "документация", "maven", "gradle" | Web Search |
-| "архитектура", "рефакторинг", "паттерн", "CQRS", "микросервис" | Deep Think |
-| "сгенерируй", "создай код", "implement", "generate" | Agent Mode |
-| Всё остальное | без режима |
-
-### Qwen режимы
-
-Qwen имеет встроенный веб-поиск (Web Search), который включается через toggle на интерфейсе. Для активации:
-1. Найти toggle или checkbox "Web Search" в интерфейсе Qwen
-2. Включить его перед отправкой запроса, требующего актуальной информации
-
-### Включение режима
-
-1. `browser_snapshot` — найти нужную кнопку
-2. Проверить её состояние (aria-pressed="true" = уже включена)
-3. Если не включена — `browser_click`
-4. Пауза (snapshot) — убедиться что включилась
-
-### Web Search через меню "+"
-
-1. `browser_click` на кнопку "More" / "Add" / "+"
-2. `browser_snapshot` — увидеть открывшееся меню
-3. `browser_click` на пункт "Search" или "联网搜索"
-
----
-
-## 📎 Файлы
-
-### Отправить файл GLM
-
-1. `browser_click` на кнопку "More" / "Add" / "+"
-2. `browser_snapshot` — найти пункт "Upload"
-3. `browser_click` на "Upload"
-4. `browser_upload_file` — передать путь к файлу
-
-**Форматы нативно поддерживаемые GLM:** `.pdf`, `.docx`, `.xls`, `.xlsx`, `.ppt`, `.pptx`, `.txt`, `.md`, `.py`, `.bmp`, `.gif`, `.mp4`
-
-**Требуют конвертации в `.txt` перед отправкой:** `.java`, `.js`, `.ts`, `.kt`, `.scala`, `.go`, `.rs`, `.cpp`, `.cs`  
-→ Скопировать содержимое файла в текстовый `.txt` и загрузить его.
-
-### Получить файл от GLM
-
-После получения ответа `browser_snapshot` — найти ссылку "Download" или кнопку скачивания.  
-`browser_click` на неё — файл сохранится.
-
----
-
-## 📋 Лог чатов
-
-Лог находится в папке скилла: `log/YYYY-MM-DD/`
-- Для GLM: `glm-chat-log-YYYY-MM-DD.md`
-- Для Qwen: `qwen-chat-log-YYYY-MM-DD.md`
-
-### Формат записи для GLM:
-```
-| [дата] | [время] | [UUID] | [тема] | https://chat.z.ai/c/[UUID] | GLM | ✅ |
-```
-
-### Формат записи для Qwen:
-```
-| [дата] | [время] | [UUID] | [тема] | https://chat.qwen.ai/c/[UUID] | Qwen | ✅ |
-```
-
-Перед созданием нового чата — проверить соответствующий лог на наличие похожей темы.
-
----
-
-## 📋 Протокол диалога
-
-```
-ЭТАП 1: Сбор контекста
-  — код, требования, ограничения, существующие решения
-
-ЭТАП 2: Формирование запроса
-  — полный текст с контекстом, прикрепить файлы если нужно
-
-ЭТАП 3: Отправка → ждать UUID в URL → ЗАПИСАТЬ UUID
-  — ждать пока Stop кнопка не исчезнет из snapshot
-
-ЭТАП 4: Анализ ответа
-  — если GLM задал вопрос → ЭТАП 5
-
-ЭТАП 5: Уточнение
-  — ответить на вопрос → повторить ЭТАП 3-4
-```
-
-🚨 Не прерывать пока Stop видна в snapshot.  
-💬 "ГОТОВО" в конце сообщения = агент закончил, ждёт ответ GLM.
-
----
-
-## ❌ Что делать при ошибках
-
-### Общие ошибки:
-| Ситуация | Действие |
-|----------|----------|
-| Элемент не найден в snapshot | Сделать ещё один snapshot (страница грузится), попробовать снова |
-| Поле ввода не принимает текст | `browser_click` на него сначала, потом `browser_type` |
-| Кнопка Send не реагирует | Попробовать `browser_press_key` → `Enter` |
-| Браузер закрыт | Определить провайдера и перейти на соответствующий URL |
-
-### Ошибки GLM:
-| Ситуация | Действие |
-|----------|----------|
-| Модель перегружена | Переключиться на GLM-5-Turbo или GLM-4.7 |
-| Не залогинен (редирект на /login) | Сообщить пользователю — нужен ручной вход на chat.z.ai |
-
-### Ошибки Qwen:
-| Ситуация | Действие |
-|----------|----------|
-| Не залогинен (редирект на /login) | Сообщить пользователю — нужен ручной вход на chat.qwen.ai |
-| Ограничение по регионам | Сообщить пользователю о возможных ограничениях доступа |
-
-⛔ НЕ писать "попробую другой подход" и не создавать JS-файлы.  
-✅ Сообщить пользователю точно что не получается.
-
----
-
-## 🏗️ Архитектура (для справки)
+## 🏗️ Файлы проекта
 
 ```
 glm-chat-mcp/
-├── SKILL.md                      ← этот файл, инструкции агента
-├── src/
-│   ├── GLMChatClient.js          ← Singleton клиент (не запускать вручную)
-│   ├── GLMChatClient-extended.js ← расширенные возможности (опционально)
-│   ├── selectors.js / errors.js / logger.js
-│   ├── chat/GLMChatManager.js    ← управление UUID
-│   ├── config/browser_selectors.json
-│   └── utils/
-│       ├── fileManager.js        ← файлы, zero deps
-│       ├── glmChatLogger.js      ← лог UUID
-│       └── ...
-└── log/                          ← UUID логи по датам
+├── SKILL.md                 ← инструкции агента (этот файл)
+├── _meta.json               ← машиночитаемый конфиг (единый источник версий)
+├── scripts/                 ← JS-скрипты для browser_evaluate
+│   ├── response.js          ← Response Detection + чтение + healthCheck
+│   ├── hooks-auto-init.js   ← Единая точка входа — auto-init hooks + trace + adapters
+│   ├── network-hooks.js     ← Network interception — перехват fetch/EventSource, SSE-буфер
+│   ├── session-manager.js   ← Session persistence — cookies + localStorage
+│   ├── provider-adapter.js  ← Унифицированный API + SSE adapters (GLM/OpenAI/Qwen/DeepSeek + OpenAINormalizer)
+│   ├── cdp-intercept.js     ← WebSocket interception
+│   ├── ai-extract.js        ← AI-powered extract fallback — 5 стратегий
+│   ├── debug-trace.js       ← Debug tracing — логирование + ошибки + таймеры
+│   ├── multi-collect.js     ← Сбор ответов multi-provider
+│   ├── mode-switcher.js     ← Универсальный переключатель режимов (DeepThink/Agent/Search/Slides/...)
+│   ├── blob-download.js     ← Blob-перехват (текст + бинарные)
+│   └── progress-monitor.js  ← Мониторинг Agent Mode
+├── server/                  ← OpenAI-compatible HTTP bridge + CloakBrowser MCP
+│   ├── openai-bridge.js     ← Express + Playwright → /v1/chat/completions
+│   ├── cloak-browser-mcp.js ← CloakBrowser MCP server (stdio JSON-RPC)
+│   ├── test-e2e.js          ← E2E test suite (11 tests)
+│   ├── package-cloak.json   ← CloakBrowser dependencies
+│   └── README.md            ← Server documentation
+├── docs/                    ← Документация
+│   ├── ARCHITECTURE.md      ← Архитектура: Network Hooks, Adapters, Bridge, Sessions
+│   ├── API.md               ← OpenAI Bridge API reference
+│   ├── reference.md         ← Техническая справка API провайдеров
+│   ├── kimi-features-reference.md ← Kimi: 9 бесплатных функций (от консультации с Kimi)
+│   ├── history/             ← История разработки
+│   └── plans/               ← Планы развития
+├── Dockerfile               ← Docker image
+├── docker-compose.yml       ← Docker Compose
+└── package.json             ← Node.js dependencies
 ```
-
-Зависимости: только `playwright` (`npm install playwright`).
 
 ---
 
-## 📝 CHANGELOG
+## 🆕 Порядок инициализации (v14.0+)
 
-### v6.0.0 (current)
-- ✅ Добавлена поддержка второго провайдера Qwen (Alibaba)
-- ✅ Новые триггеры: `обсуди с qwen`, `ask qwen`, `qwen`
-- ✅ URL Qwen: `https://chat.qwen.ai/` и `https://chat.qwen.ai/c/[UUID]`
-- ✅ Раздельная навигация и элементы управления для GLM и Qwen
-- ✅ Раздельные логи чатов для каждого провайдера
+При первом обращении к провайдеру в сессии:
 
-### v5.2.0
-- ✅ Убраны все JS-блоки кода из SKILL.md — агент перестанет создавать бесполезные .js файлы
-- ✅ Инструкции переформатированы как прямые действия через Playwright MCP инструменты
-- ✅ Добавлено правило запоминания успешных элементов (не перебирать повторно)
-- ✅ Явный запрет на создание файлов для работы с браузером
+1. `browser_evaluate(filename='hooks-auto-init.js')` — **Единая точка входа** — автоматически:
+   - Устанавливает network hooks (fetch/EventSource перехват)
+   - Инициализирует debug trace
+   - Инициализирует адаптеры (если provider-adapter.js SSE classes загружены)
+2. `browser_evaluate(filename='provider-adapter.js')` — унифицированный API + SSE адаптеры
+3. `browser_evaluate(filename='session-manager.js')` — если нужна session persistence
 
-### v5.1.0
-- Исправлен краш при старте (AutoClaw/OCR/API импорты)
-- fileManager.js без внешних зависимостей
-- package.json очищен
+После инициализации использовать:
+- `browser_evaluate('window.__adapter.observe()')` — полная диагностика
+- `browser_evaluate('window.__adapter.read()')` — чтение ответа (adapter → network → DOM)
+- `browser_evaluate('window.__adapter.healthCheck()')` — проверка всех систем
+- `browser_evaluate('window.__session.status()')` — статус авторизации
+- `browser_evaluate('window.__netBuffer.stats()')` — статистика перехваченных запросов
 
-### v5.0.0
-- CDP/PersistentContext авторизация, Agent Mode, навигация по UUID
+---
+
+## 📖 Подробная документация
+
+| Документ | Содержание |
+|----------|-----------|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Network Hooks, Provider Adapters, OpenAI Bridge, Session Mgmt, CDP, CloakBrowser, AI-Extract, Response Detection, Error Recovery |
+| [docs/API.md](docs/API.md) | OpenAI Bridge API: endpoints, request/response formats, streaming, function calling, auth, env variables |
+
+---
+
+## ✅ Provider Status
+
+| Provider | Send | Network (SSE) | DOM | Input Type | API Endpoint |
+|----------|------|---------------|-----|------------|-------------|
+| **GLM** | ✅ | ✅ 18-492 tok | ✅ | textarea | `/api/v2/chat/completions` | ✅ Agent, DeepThink, Search | ✅ setInputFiles |
+| **Qwen** | ✅ | ✅ 1-30 tok | ✅ | textarea | `/api/v2/chat/completions` | ✅ DeepThink, Search | ✅ setInputFiles |
+| **DeepSeek** | ✅ | ⚠️ re-override | ✅ | textarea + кнопка | `/api/v0/chat/completion` | ✅ DeepThink, Search, Fast | ✅ setInputFiles (200+ форматов) |
+| **Kimi** | ✅ | ❌ gRPC | ✅ | contenteditable | gRPC-web | ✅ Agent Swarm, Deep Research, Code | ❌ нет file input |
+
+---
+
+## 📝 Changelog
+
+### v15.3.0 (current) — Mode Switcher + Kimi Features Integration + Slash Commands
+
+- 🆕 `scripts/mode-switcher.js` — универсальный переключатель режимов всех провайдеров
+- 🆕 Режимные триггеры в SKILL.md: DeepThink, Agent, Search, Deep Research, Agent Swarm, Slides, Websites, Docs, Sheets
+- 🆕 Workflow обновлён: 7→8 шагов (добавлен режим + файл upload)
+- 🆕 `docs/reference/kimi-features-reference.md` — полный обзор 9 функций Kimi
+- 🆕 Kimi: Deep Research, Agent Swarm, Slides, Websites, Docs, Sheets, Code, Claw — все через sidebar
+- 🆕 DeepSeek: Быстрый/Глубокое мышление/Умный поиск — через клик по кнопке
+- 🔥 Kimi slash-команды: `/deep-research`, `/docx`, `/pdf`, `/xlsx` — генерация файлов!
+- 🔥 Kimi Code: отдельная страница (kimi.com/code), модель K2.7 Code, CLI через `curl | bash`
+- 🔥 Kimi Claw = поиск через 🔍 или slash-команду
+
+### v15.2.0 — Advanced Mode Testing: DeepThink ✅ Agent ✅ Files ✅
+
+- 🆕 GLM File Upload: `setInputFiles()` на скрытый input работает — прочитал файл ✅
+- 🆕 DeepSeek File Upload: 200+ форматов, `setInputFiles()` + кнопка Send ✅
+- 🆕 Qwen File Upload: `setInputFiles()` на скрытый input работает ✅
+- 🆕 DeepSeek DeepThink: "Глубокое мышление" включено, reasoning в ответе ✅
+- 🆕 DeepSeek sendMode: 'button' — кнопка отправки вместо Enter ✅
+- 🆕 GLM Agent Mode + DeepThink + Web Search — все режимы протестированы ✅
+- 🆕 Qwen DeepThink: "Автоматический" (3 опции), thinking selector найден ✅
+- 🆕 Kimi: Agent Swarm, Deep Research, Slides, Code — 9 режимов в sidebar ✅
+- 🆕 `docs/plans/provider-advanced-testing-results.md` — полный отчёт
+- 🆕 Provider status table: добавлены Mode + File колонки
+
+### v15.1.0 — Multi-Provider Testing: GLM ✅ Qwen ✅ DeepSeek ✅ Kimi ✅
+
+- 🆕 Kimi adapter: contenteditable input, gRPC (DOM-only), `.chat-input-editor`
+- 🆕 Contenteditable support in `humanInput()`: `execCommand('insertText')` for React/Vue
+- 🆕 Real API patterns from testing: GLM=`/api/v2/chat/completions`, Qwen=same, DeepSeek=`/api/v0/chat/completion`, Kimi=gRPC
+- 🆕 All 4 providers tested: short answer + long answer, send/read cycles
+- 🆕 `docs/plans/provider-testing-results.md` — full test results
+- ⚠️ Kimi: network hooks don't work (gRPC), DOM fallback only
+- ⚠️ DeepSeek: SPA caches fetch, needs re-override after page load
+- ⚠️ Qwen/GLM: navigation destroys scripts, needs `addInitScript` for production
+
+### v15.0.0 — P3 Complete: E2E + Function Calling + Token Accuracy
+
+- 🆕 E2E test suite: 11/11 tests pass (`server/test-e2e.js`)
+- 🆕 Real chat completion via CDP: prompt→GLM→response in OpenAI format
+- 🆕 Function Calling эмуляция: tools → system prompt injection → parse tool_calls from response
+- 🆕 `stream_options: {include_usage: true}` → usage in final `[DONE]` chunk
+- 🆕 Token estimation: char→token heuristic (4 chars ≈ 1 token EN, 1.5 chars ≈ 1 token CJK)
+- 🆕 `parseToolCalls()`: extracts `<tool_call>` JSON blocks from model response
+
+### v14.4.0 — P3.1 Production Hardening
+
+- 🆕 API Authentication: Bearer token + query key (env API_KEYS)
+- 🆕 Rate Limiting: per-key, X-RateLimit-* headers, 429 errors
+- 🆕 Response Cache: in-memory, TTL 5 min, hash-based, eviction
+- 🆕 Auto-Retry & Fallback: GLM↔DeepSeek cross-provider retry
+- Env config: API_KEYS, RATE_LIMIT_WINDOW, RATE_LIMIT_MAX, CACHE, CACHE_TTL
+
+*See `docs/history` in the git repo for older entries (v14.3.0 and below).*

@@ -1,14 +1,26 @@
 {
-  "name": "glm-chat-mcp",
-  "version": "5.1.0",
-  "description": "GLM Chat MCP — Playwright automation for chat.z.ai (VeAI / IntelliJ IDEA)",
-  "main": "src/GLMChatClient.js",
-  "type": "module",
+  "name": "glm-chat-mcp-server",
+  "version": "14.2.0",
+  "description": "OpenAI-compatible HTTP bridge for free web chat providers (GLM, Qwen, DeepSeek) via Playwright",
+  "main": "server/openai-bridge.js",
   "scripts": {
-    "test": "node tests/test-01-send-message.js",
-    "test:debug": "DEBUG=pw:api node tests/test-01-send-message.js"
+    "start": "node server/openai-bridge.js",
+    "start:headed": "HEADLESS=false node server/openai-bridge.js",
+    "start:port": "node server/openai-bridge.js --port="
   },
   "dependencies": {
+    "express": "^4.22.2",
     "playwright": "^1.40.0"
-  }
+  },
+  "keywords": [
+    "openai",
+    "api",
+    "glm",
+    "qwen",
+    "deepseek",
+    "playwright",
+    "bridge",
+    "mcp"
+  ],
+  "license": "MIT"
 }

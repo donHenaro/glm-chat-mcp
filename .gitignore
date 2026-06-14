@@ -1,2 +1,35 @@
+# IDE
 .idea/
+.vscode/
+
+# Dependencies
 node_modules/
+
+# Build artifacts
+dist/
+
+# Runtime logs (keep structure, ignore content)
+log/**/*.md
+!log/index.md
+
+# Downloads (temporary)
+downloads/
+
+# Test artifacts
+test-document.pdf
+test-results.md
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Chrome profile (for bridge)
+chrome-bridge-profile/
+
+# Temporary files
+*.tmp
+*.bak
