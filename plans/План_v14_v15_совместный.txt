@@ -61,54 +61,51 @@ GLM упомянул о планах сделать fork, но не реализ
 
 ## 4. План доработок (v14.0 → v15.0)
 
-### P1 — Следующий приоритет (4 дня)
+### ✅ P1 — ЗАВЕРШЕНО (все 5 пунктов)
 
-#### 4.1 AI-powered extract fallback (1 день)
-- Если network buffer пуст И DOM-селекторы не нашли ответ
-- Использовать browser_snapshot для анализа accessibility tree
-- Парсить текст ответа из snapshot
-- Файл: `scripts/ai-extract.js`
+#### ✅ 4.1 AI-extract fallback (реализовано)
+- ai-extract.js: 5 стратегий (network → selectors → roles → containers → longest-prose)
+- Тест: ai-extract.diagnose() нашёл ответ через selector:.markdown-prose
 
-#### 4.2 Улучшение progress-monitor.js (0.5 дня)
-- Интеграция с network-hooks.js для real-time SSE-мониторинга
-- `window.__netBuffer.getLatestTokens()` для progressive reading
-- Показ хода стриминга (кол-во токенов, ETA)
+#### ✅ 4.2 Улучшение progress-monitor.js (реализовано)
+- progress-monitor.js v14: network-aware (phase, progress%, ETA, netDone vs domDone)
+- Тест: phase=complete, source=network (DOM ещё spinner!)
 
-#### 4.3 Debug tracing (0.5 дня)
-- `scripts/debug-trace.js` — логирование всех действий
-- Сохранение трейса в `log/YYYY-MM-DD/trace-*.json`
-- Формат: [{timestamp, action, result, duration}]
+#### ✅ 4.3 Debug tracing (реализовано)
+- debug-trace.js: log/error/success/startTimer/endTimer/dump/stats/clear/export
 
-#### 4.4 Auto-init при первом обращении (1 день)
-- SKILL.md: обновить workflow — шаг 3.5 "Установить network hooks"
-- Агент автоматически инъецирует network-hooks.js при переходе на вкладку
-- Проверка `window.__netHooksInstalled` — если false, установить
+#### ✅ 4.4 Auto-init при первом обращении (реализовано)
+- hooks-auto-init.js: единая точка входа, auto-init hooks + trace + adapters
+- SKILL.md: обновлён workflow
 
-#### 4.5 Multi-provider интеграция с adapter (1 день)
-- Обновить multi-provider.js для работы с provider-adapter
-- Использовать `window.__adapter.send()` вместо прямых DOM-операций
-- Сбор ответов через `window.__adapter.read()` с source индикацией
+#### ✅ 4.5 Multi-provider интеграция с adapter (реализовано)
+- multi-provider.js v14: adapter.send() когда доступен
+- multi-collect.js: adapter → network → ai-extract → DOM
 
-### P2 — Перспективные (7 дней)
+### ✅ P2 — ЗАВЕРШЕНО (все 4 пункта)
 
-#### 4.6 OpenAI-совместимый API слой (3 дня)
-- HTTP-сервер с /v1/chat/completions
-- Работает через наш MCP Playwright → браузер → провайдер
-- SSE-streaming в OpenAI-формате
-- Интеграция с Cline, Roo-Code, openclaw
+#### ✅ 4.6 OpenAI-совместимый API слой (реализовано)
+- server/openai-bridge.js: Express + Playwright
+- GET /v1/models, GET /v1/status, GET /v1/sessions
+- POST /v1/chat/completions (stream + non-stream)
+- 6 моделей: glm-5.1, glm-5, glm-4, qwen3, deepseek, deepseek-chat
+- CDP auto-discovery + session management + conversation context reuse
+- Тест: /v1/status → {status:'running', version:'14.3.0', 6 models}
+- Тест: OpenAI completion → {content:'Париж', reasoning_content:'...', finish_reason:'stop'}
 
-#### 4.7 CloakBrowser MCP сервер (2 дня)
-- Кастомный MCP Playwright сервер с CloakBrowser вместо Playwright
-- `npm install cloakbrowser` → автозамена
-- Конфигурация: humanize, proxy, geoip
+#### ✅ 4.7 CloakBrowser MCP сервер (реализовано)
+- server/cloak-browser-mcp.js: stdio JSON-RPC, 6 tools
+- Falls back to playwright if cloakbrowser not installed
+- server/package-cloak.json
 
-#### 4.8 CDP interception (1 день)
-- Для провайдеров с WebSocket-ответами
-- Через browser_network_requests MCP инструмент
+#### ✅ 4.8 CDP interception (реализовано)
+- scripts/cdp-intercept.js: WebSocket interception + EventSource fallback
+- window.__wsBuffer.extractResponse() для WS-based провайдеров
 
-#### 4.9 HTTP bridge standalone (1 день)
-- Express-сервер как альтернатива MCP
-- Для использования не из IDE
+#### ✅ 4.9 HTTP bridge standalone (реализовано)
+- server/openai-bridge.js: Express standalone server
+- server/README.md: полная документация
+- CloakBrowser mode: CLOAK=true
 
 ---
 
