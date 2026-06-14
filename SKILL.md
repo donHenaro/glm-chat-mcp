@@ -38,6 +38,11 @@ GLM Chat MCP is a browser-automation skill for consulting GLM, Qwen, and DeepSee
 | **Websites** | `создай сайт`, `make website`, `html` | Kimi |
 | **Docs** | `анализ документа`, `проанализируй файл`, `docs` | Kimi |
 | **Sheets** | `создай таблицу`, `make spreadsheet`, `csv` | Kimi |
+| **Kimi Code** | `kimi code`, `код агент`, `code cli` | Kimi (отдельная страница kimi.com/code, модель K2.7 Code) |
+| **/deep-research** | `/deep-research`, `слеш исследование` | Kimi (slash-команда, 10+ итераций) |
+| **/docx** | `/docx`, `создай docx`, `word документ` | Kimi (slash → генерация .docx) |
+| **/pdf** | `/pdf`, `создай pdf` | Kimi (slash → генерация PDF) |
+| **/xlsx** | `/xlsx`, `создай xlsx`, `excel таблица` | Kimi (slash → генерация .xlsx) |
 
 ⛔ Не закрывать браузер после консультации
 ✅ Браузер уже открыт — сначала проверить состояние
@@ -139,7 +144,7 @@ glm-chat-mcp/
 
 ## 📝 Changelog
 
-### v15.3.0 (current) — Mode Switcher + Kimi Features Integration
+### v15.3.0 (current) — Mode Switcher + Kimi Features Integration + Slash Commands
 
 - 🆕 `scripts/mode-switcher.js` — универсальный переключатель режимов всех провайдеров
 - 🆕 Режимные триггеры в SKILL.md: DeepThink, Agent, Search, Deep Research, Agent Swarm, Slides, Websites, Docs, Sheets
@@ -147,6 +152,9 @@ glm-chat-mcp/
 - 🆕 `docs/reference/kimi-features-reference.md` — полный обзор 9 функций Kimi
 - 🆕 Kimi: Deep Research, Agent Swarm, Slides, Websites, Docs, Sheets, Code, Claw — все через sidebar
 - 🆕 DeepSeek: Быстрый/Глубокое мышление/Умный поиск — через клик по кнопке
+- 🔥 Kimi slash-команды: `/deep-research`, `/docx`, `/pdf`, `/xlsx` — генерация файлов!
+- 🔥 Kimi Code: отдельная страница (kimi.com/code), модель K2.7 Code, CLI через `curl | bash`
+- 🔥 Kimi Claw = поиск через 🔍 или slash-команду
 
 ### v15.2.0 — Advanced Mode Testing: DeepThink ✅ Agent ✅ Files ✅
 

@@ -51,8 +51,13 @@
       websites:     { action: 'sidebar', label: 'Websites', find: () => { const el = Array.from(document.querySelectorAll('.agent-label')).find(e => e.textContent?.trim() === 'Websites'); return el?.closest('.agent-info') || el?.parentElement || el; } },
       docs:         { action: 'sidebar', label: 'Docs', find: () => { const el = Array.from(document.querySelectorAll('.agent-label')).find(e => e.textContent?.trim() === 'Docs'); return el?.closest('.agent-info') || el?.parentElement || el; } },
       sheets:       { action: 'sidebar', label: 'Sheets', find: () => { const el = Array.from(document.querySelectorAll('.agent-label')).find(e => e.textContent?.trim() === 'Sheets'); return el?.closest('.agent-info') || el?.parentElement || el; } },
-      kimiCode:     { action: 'sidebar', label: 'Kimi Code', find: () => { const el = Array.from(document.querySelectorAll('.agent-label')).find(e => e.textContent?.trim() === 'Kimi Code'); return el?.closest('.agent-info') || el?.parentElement || el; } },
-      claw:         { action: 'sidebar', label: 'Kimi Claw', find: () => { const el = Array.from(document.querySelectorAll('.agent-label')).find(e => e.textContent?.trim() === 'Kimi Claw'); return el?.closest('.agent-info') || el?.parentElement || el; } },
+      kimiCode:     { action: 'sidebar', label: 'Kimi Code', find: () => document.querySelector('.nav-item.kfc-item') },
+      claw:         { action: 'slash', label: 'Kimi Claw', slashName: 'deep-research', find: () => document.querySelector('.skill-item'), note: 'Kimi Claw = поиск, активируется через slash-команду или кнопку 🔍' },
+      // Slash-команды (через / в input)
+      'slash-deep-research': { action: 'slash', label: '/deep-research', slashName: 'deep-research', find: () => document.querySelector('.skill-item') },
+      'slash-docx':         { action: 'slash', label: '/docx', slashName: 'docx', find: () => document.querySelector('.skill-item') },
+      'slash-pdf':          { action: 'slash', label: '/pdf', slashName: 'pdf', find: () => document.querySelector('.skill-item') },
+      'slash-xlsx':         { action: 'slash', label: '/xlsx', slashName: 'xlsx', find: () => document.querySelector('.skill-item') },
     },
   };
 
@@ -77,6 +82,22 @@
           return { switched: true, provider, mode: name, method: 'sidebar', label: mode.label };
         }
         return { error: 'not_found', provider, mode: name, label: mode.label };
+      }
+
+      if (mode.action === 'slash') {
+        // Slash-команда: ввести /<name> в input и выбрать из меню
+        const input = document.querySelector('.chat-input-editor, [contenteditable="true"]');
+        if (!input) return { error: 'no_input', provider, mode: name };
+        input.focus();
+        document.execCommand('selectAll', false, null);
+        document.execCommand('insertText', false, '/' + (mode.slashName || name) + ' ');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        // Подождать появления меню и выбрать первый элемент
+        setTimeout(() => {
+          const firstItem = document.querySelector('.skill-item');
+          if (firstItem) firstItem.click();
+        }, 1000);
+        return { switched: true, provider, mode: name, method: 'slash', slashName: mode.slashName || name, note: mode.note };
       }
 
       if (mode.action === 'click') {
