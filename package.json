@@ -1,0 +1,26 @@
+{
+  "name": "glm-chat-mcp-server",
+  "version": "14.2.0",
+  "description": "OpenAI-compatible HTTP bridge for free web chat providers (GLM, Qwen, DeepSeek) via Playwright",
+  "main": "server/openai-bridge.js",
+  "scripts": {
+    "start": "node server/openai-bridge.js",
+    "start:headed": "HEADLESS=false node server/openai-bridge.js",
+    "start:port": "node server/openai-bridge.js --port="
+  },
+  "dependencies": {
+    "express": "^4.22.2",
+    "playwright": "^1.40.0"
+  },
+  "keywords": [
+    "openai",
+    "api",
+    "glm",
+    "qwen",
+    "deepseek",
+    "playwright",
+    "bridge",
+    "mcp"
+  ],
+  "license": "MIT"
+}

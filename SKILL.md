@@ -525,6 +525,9 @@ glm-chat-mcp/                     ← https://github.com/donHenaro/glm-chat-mcp
 │   ├── multi-collect.js          ← 🆕 Сбор ответов multi-provider (adapter → network → ai-extract → DOM)
 │   ├── blob-download.js          ← Blob-перехват (текст + бинарные, try/finally)
 │   └── progress-monitor.js       ← Мониторинг Agent Mode (v14: network-aware)
+├── server/                       ← 🆕 OpenAI-compatible HTTP bridge
+│   └── openai-bridge.js        ← Express + Playwright → /v1/chat/completions
+├── package.json                 ← 🆕 Node.js dependencies (express, playwright)
 ├── plans/                        ← планы развития (анализ аналогов и т.д.)
 ├── log/                          ← логи чатов
 └── test-results.md               ← результаты тестирования селекторов
@@ -626,7 +629,7 @@ spring.jpa.hibernate.ddl-auto=validate.
 
 ## 📋 Changelog
 
-### v14.2.0 (current) — Network Intelligence + AI Extract
+### v14.2.0 (current) — Network Intelligence + AI Extract + OpenAI Bridge
 **P1 полностью реализовано:**
 - 🆕 `hooks-auto-init.js` — единая точка входа, auto-init hooks + trace + adapters
 - 🆕 `ai-extract.js` — AI-powered extract fallback (5 стратегий: network → selectors → roles → containers → longest-prose)
@@ -634,11 +637,20 @@ spring.jpa.hibernate.ddl-auto=validate.
 - `progress-monitor.js` v14: network-aware monitoring (phase, progress%, ETA, netDone)
 - `multi-provider.js` v14: использует adapter.send() когда доступен
 
+**P2 частично реализовано:**
+- 🆕 `server/openai-bridge.js` — OpenAI-compatible HTTP bridge (Express + Playwright)
+- 🆕 `package.json` — Node.js зависимости (express, playwright)
+- Models: glm-5.1, glm-5, glm-4, qwen3, deepseek, deepseek-chat
+- Endpoints: GET /v1/models, POST /v1/chat/completions (stream/non-stream)
+- CDP connection: поддержка подключения к существующему браузеру
+
 **Протестировано:**
 - ✅ fetch-stream через tee() работает на свежей вкладке
-- ✅ answerText="4" для "2+2?" — network detection быстрее DOM
+- ✅ answerText="Париж" для "столица Франции" — network detection быстрее DOM
 - ✅ progress-monitor: phase=complete, source=network (DOM ещё spinner!)
-- ✅ ai-extract: 5 стратегий извлечения ответа
+- ✅ OpenAI completion response: {content:"Париж", reasoning_content:"...", finish_reason:"stop"}
+- ✅ OpenAI /v1/models endpoint: 6 моделей
+- ✅ Полный пайплайн: HTTP request → GLM chat → SSE → network buffer → OpenAI format
 
 ### v14.0.0 — Network Intelligence Edition
 **По анализу аналогов (Chat2API, WebModel, CloakBrowser, Stagehand, Steel.dev):**
