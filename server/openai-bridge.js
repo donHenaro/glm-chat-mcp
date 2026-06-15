@@ -216,7 +216,7 @@ app.post('/v1/chat/completions', async (req, res) => {
     return res.status(400).json({ error: { message: 'messages is required', type: 'invalid_request_error' } });
   }
 
-  const provider = PROVIDERS[model];
+  let provider = PROVIDERS[model];
   if (!provider) {
     return res.status(400).json({ error: { message: `Unknown model: ${model}. Available: ${Object.keys(PROVIDERS).join(', ')}`, type: 'invalid_request_error' } });
   }
@@ -234,6 +234,37 @@ app.post('/v1/chat/completions', async (req, res) => {
     return res.status(400).json({ error: { message: 'No user message found', type: 'invalid_request_error' } });
   }
   let prompt = typeof lastUserMsg.content === 'string' ? lastUserMsg.content : JSON.stringify(lastUserMsg.content);
+
+  // Auto-reuse: if no explicit session, find most recent session for this provider
+  if (!session) {
+    const providerUrl = provider.url;
+    const providerSessions = Object.entries(sessions)
+      .filter(([, s]) => s.provider?.url === providerUrl && s.page && !s.page.isClosed())
+      .sort((a, b) => b[1].lastUsed - a[1].lastUsed);
+    if (providerSessions.length > 0) {
+      session = providerSessions[0][1];
+      console.log(`[bridge] Auto-reusing session: ${providerSessions[0][0]} for ${providerUrl}`);
+    }
+  }
+
+  // URL-based routing: if prompt mentions a provider URL, route to that provider's session
+  if (!session) {
+    for (const [modelId, prov] of Object.entries(PROVIDERS)) {
+      const hostname = new URL(prov.url).hostname;
+      if (prompt.includes(hostname) || prompt.includes(prov.url)) {
+        const urlSessions = Object.entries(sessions)
+          .filter(([, s]) => s.provider?.url === prov.url && s.page && !s.page.isClosed())
+          .sort((a, b) => b[1].lastUsed - a[1].lastUsed);
+        if (urlSessions.length > 0) {
+          session = urlSessions[0][1];
+          provider = prov;
+          console.log(`[bridge] URL routing: matched ${hostname} → session ${urlSessions[0][0]}`);
+          break;
+        }
+      }
+    }
+  }
+
 
   // === Function Calling Emulation ===
   // If client sends tools, inject them as prompt instructions
@@ -287,15 +318,19 @@ Important: Only use tool calls when the task requires it. For normal questions, 
 
     // Reuse session page if available
     let page;
+    let activeSessionId = null;
     if (session?.page && !session.page.isClosed()) {
       page = session.page;
       session.lastUsed = Date.now();
-      console.log(`[bridge] Reusing session: ${sessionId}`);
+      // Find the session id for auto-reused sessions
+      activeSessionId = Object.entries(sessions).find(([, s]) => s === session)?.[0] || sessionId;
+      console.log(`[bridge] Reusing session: ${activeSessionId}`);
+      if (!res.headersSent && activeSessionId) res.setHeader('X-Session-Id', activeSessionId);
     } else {
       page = await context.newPage();
-      const newSessionId = sessionId || createSessionId();
-      sessions[newSessionId] = { page, provider, lastUsed: Date.now(), messages: [] };
-      if (!res.headersSent) res.setHeader('X-Session-Id', newSessionId);
+      activeSessionId = createSessionId();
+      sessions[activeSessionId] = { page, provider, lastUsed: Date.now(), messages: [] };
+      if (!res.headersSent) res.setHeader('X-Session-Id', activeSessionId);
     }
 
     try {
@@ -359,6 +394,10 @@ Important: Only use tool calls when the task requires it. For normal questions, 
         };
         window.__netHooksInstalled = true;
       });
+
+      // Clear network buffer from previous requests and track message in session
+      await page.evaluate(() => { window.__netBuffer?.flush?.(); });
+      if (session?.messages) session.messages.push({ role: 'user', content: prompt });
 
       // Send prompt (textarea for most providers, contenteditable for Kimi)
       const providerAdapter = provider.adapter;
@@ -638,6 +677,9 @@ Important: Only use tool calls when the task requires it. For normal questions, 
         // Cache the response
         cacheSet(cacheHash(model, messages), response);
 
+        // Track assistant message in session history
+        if (session?.messages) session.messages.push({ role: 'assistant', content: contentText || '' });
+
         res.json(response);
       }
     } finally {
@@ -836,8 +878,10 @@ app.get('/v1/sessions', (req, res) => {
   const list = Object.entries(sessions).map(([id, s]) => ({
     id,
     provider: s.provider?.url,
+    model: Object.entries(PROVIDERS).find(([, p]) => p.url === s.provider?.url)?.[0] || 'unknown',
     age: Math.round((Date.now() - s.lastUsed) / 1000) + 's ago',
     messages: s.messages?.length || 0,
+    history: s.messages || [],
   }));
   res.json({ sessions: list });
 });
