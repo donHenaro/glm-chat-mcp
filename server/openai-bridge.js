@@ -330,6 +330,7 @@ Important: Only use tool calls when the task requires it. For normal questions, 
       page = await context.newPage();
       activeSessionId = createSessionId();
       sessions[activeSessionId] = { page, provider, lastUsed: Date.now(), messages: [] };
+      session = sessions[activeSessionId]; // Update session reference for message tracking
       if (!res.headersSent) res.setHeader('X-Session-Id', activeSessionId);
     }
 
@@ -884,6 +885,71 @@ app.get('/v1/sessions', (req, res) => {
     history: s.messages || [],
   }));
   res.json({ sessions: list });
+});
+
+// Read chat history from page DOM
+app.get('/v1/sessions/:id/history', async (req, res) => {
+  const session = sessions[req.params.id];
+  if (!session?.page || session.page.isClosed()) {
+    return res.status(404).json({ error: 'Session not found or page closed' });
+  }
+  try {
+    const chatHistory = await session.page.evaluate(() => {
+      const messages = [];
+
+      // Provider-specific message extraction
+      const hostname = location.hostname;
+
+      if (hostname.includes('z.ai') || hostname.includes('chatglm')) {
+        // GLM: messages are in .message-item containers with .user and .assistant classes
+        const items = document.querySelectorAll('.message-item');
+        items.forEach((el, i) => {
+          const isUser = !!el.querySelector('.user, [class*="user"], [class*="self"]') || el.className.includes('user');
+          const contentEl = el.querySelector('.markdown, [class*="markdown"], [class*="content"]') || el;
+          const text = contentEl.innerText?.trim();
+          if (text) messages.push({ index: i, role: isUser ? 'user' : 'assistant', content: text.slice(0, 3000) });
+        });
+      } else if (hostname.includes('deepseek')) {
+        // DeepSeek: .ds-chat-message with user/assistant distinction
+        const items = document.querySelectorAll('.ds-chat-message, [class*="chat-message"]');
+        items.forEach((el, i) => {
+          const isUser = el.className.includes('user') || !!el.querySelector('[class*="user"]');
+          const text = el.innerText?.trim();
+          if (text) messages.push({ index: i, role: isUser ? 'user' : 'assistant', content: text.slice(0, 3000) });
+        });
+      } else if (hostname.includes('qwen')) {
+        // Qwen: dialogue items
+        const items = document.querySelectorAll('[class*="dialogue-item"], [class*="chat-row"]');
+        items.forEach((el, i) => {
+          const isUser = el.className.includes('user') || !!el.querySelector('[class*="user"]');
+          const text = el.innerText?.trim();
+          if (text) messages.push({ index: i, role: isUser ? 'user' : 'assistant', content: text.slice(0, 3000) });
+        });
+      } else if (hostname.includes('kimi')) {
+        // Kimi: .agent-chat-item
+        const items = document.querySelectorAll('.agent-chat-item, [class*="chatItem"]');
+        items.forEach((el, i) => {
+          const isUser = el.className.includes('user') || !!el.querySelector('[class*="user"]');
+          const text = el.innerText?.trim();
+          if (text) messages.push({ index: i, role: isUser ? 'user' : 'assistant', content: text.slice(0, 3000) });
+        });
+      }
+
+      // Fallback: generic markdown blocks if nothing found
+      if (messages.length === 0) {
+        const blocks = document.querySelectorAll('[class*="markdown"], [role="article"]');
+        blocks.forEach((el, i) => {
+          const text = el.innerText?.trim();
+          if (text) messages.push({ index: i, role: 'assistant', content: text.slice(0, 3000) });
+        });
+      }
+
+      return messages;
+    });
+    res.json({ sessionId: req.params.id, provider: session.provider?.url, messages: chatHistory });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.listen(PORT, () => {
