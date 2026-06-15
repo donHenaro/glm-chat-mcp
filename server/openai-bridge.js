@@ -335,9 +335,10 @@ Important: Only use tool calls when the task requires it. For normal questions, 
     }
 
     try {
-      // Navigate to provider (only if new page or not on chat URL)
+      // Navigate to provider (only if not already on chat page)
       const currentUrl = page.url();
-      const needsNavigate = !currentUrl.includes(new URL(provider.url).hostname);
+      const providerHostname = new URL(provider.url).hostname;
+      const needsNavigate = !currentUrl.includes(providerHostname);
       if (needsNavigate) {
         await page.goto(provider.url, { timeout: 30000, waitUntil: 'domcontentloaded' });
       }
