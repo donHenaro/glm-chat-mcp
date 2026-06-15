@@ -56,6 +56,8 @@ const PROVIDERS = {
   'qwen3':      { url: 'https://chat.qwen.ai',           adapter: 'openai' },
   'deepseek':   { url: 'https://chat.deepseek.com',      adapter: 'openai' },
   'deepseek-chat': { url: 'https://chat.deepseek.com',   adapter: 'openai' },
+  'kimi':       { url: 'https://kimi.com',                adapter: 'kimi' },
+  'kimi-k2':    { url: 'https://kimi.com',                adapter: 'kimi' },
 };
 const DEFAULT_MODEL = 'glm-5.1';
 const TIMEOUT_MS = 300000; // 5 minutes max
@@ -299,7 +301,8 @@ Important: Only use tool calls when the task requires it. For normal questions, 
     try {
       // Navigate to provider (only if new page or not on chat URL)
       const currentUrl = page.url();
-      if (!currentUrl.includes(new URL(provider.url).hostname)) {
+      const needsNavigate = !currentUrl.includes(new URL(provider.url).hostname);
+      if (needsNavigate) {
         await page.goto(provider.url, { timeout: 30000, waitUntil: 'domcontentloaded' });
       }
       await page.waitForTimeout(2000);
@@ -331,24 +334,64 @@ Important: Only use tool calls when the task requires it. For normal questions, 
           }
           return response;
         };
+        // Also intercept EventSource (used by some providers like DeepSeek)
+        if (!window.__origEventSource) window.__origEventSource = window.EventSource;
+        window.EventSource = function(url, opts) {
+          const es = new window.__origEventSource(url, opts);
+          if (patterns.some(p => url.includes(p))) {
+            let tokens = [];
+            es.addEventListener('message', (e) => {
+              const d = e.data;
+              if (d === '[DONE]') {
+                window.__netBuffer.add({url, body:'', sseTokens:tokens, timestamp:Date.now(), method:'eventsource', complete:true});
+                return;
+              }
+              try {
+                const j = JSON.parse(d);
+                const gc = j?.data?.delta_content;
+                if (gc) { tokens.push({text:gc, phase:j?.data?.phase||'answer'}); return; }
+                const oc = j?.choices?.[0]?.delta?.content || '';
+                if (oc) tokens.push({text:oc, phase:'answer'});
+              } catch {}
+            });
+          }
+          return es;
+        };
         window.__netHooksInstalled = true;
       });
 
-      // Send prompt
-      await page.evaluate((text) => {
-        const textarea = document.querySelector('#chat-input, textarea');
-        if (!textarea) throw new Error('Textarea not found');
-        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
-        if (nativeSetter) nativeSetter.call(textarea, text);
-        textarea.dispatchEvent(new Event('input', { bubbles: true }));
-        textarea.dispatchEvent(new Event('change', { bubbles: true }));
-      }, prompt);
+      // Send prompt (textarea for most providers, contenteditable for Kimi)
+      const providerAdapter = provider.adapter;
+      await page.evaluate(({ text, adapter }) => {
+        if (adapter === 'kimi') {
+          // Kimi uses contenteditable div
+          const editor = document.querySelector('.chat-input-editor, [contenteditable="true"]');
+          if (!editor) throw new Error('Contenteditable input not found');
+          editor.focus();
+          document.execCommand('insertText', false, text);
+          editor.dispatchEvent(new Event('input', { bubbles: true }));
+        } else {
+          const textarea = document.querySelector('#chat-input, textarea');
+          if (!textarea) throw new Error('Textarea not found');
+          const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+          if (nativeSetter) nativeSetter.call(textarea, text);
+          textarea.dispatchEvent(new Event('input', { bubbles: true }));
+          textarea.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      }, { text: prompt, adapter: providerAdapter });
 
       await page.waitForTimeout(300);
-      await page.evaluate(() => {
-        const textarea = document.querySelector('#chat-input, textarea');
-        if (textarea) textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-      });
+      await page.evaluate((adapter) => {
+        if (adapter === 'kimi') {
+          const editor = document.querySelector('.chat-input-editor, [contenteditable="true"]');
+          if (editor) {
+            editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+          }
+        } else {
+          const textarea = document.querySelector('#chat-input, textarea');
+          if (textarea) textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        }
+      }, providerAdapter);
 
       // Wait for response via network buffer
       const chatId = `chatcmpl-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -380,35 +423,54 @@ Important: Only use tool calls when the task requires it. For normal questions, 
         const firstChunk = { id: chatId, object: 'chat.completion.chunk', created: Math.floor(Date.now()/1000), model, choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }] };
         res.write(`data: ${JSON.stringify(firstChunk)}\n\n`);
 
-        // Poll network buffer for new tokens
+        // Poll network buffer for new tokens (or DOM for gRPC providers)
+        const useDomFallback = providerAdapter === 'kimi' || provider.url.includes('deepseek.com');
         let lastTokenCount = 0;
         let thinkingDone = false;
+        let lastDomText = '';
 
         while (Date.now() - startTime < TIMEOUT_MS) {
           await page.waitForTimeout(500);
 
-          const state = await page.evaluate(() => {
+          const state = await page.evaluate((domFallback) => {
+            if (domFallback) {
+              // DOM fallback for gRPC providers (kimi)
+              const mdBlocks = document.querySelectorAll('[class*="markdown"], [class*="message-content"], .agent-chat-item');
+              const lastBlock = mdBlocks[mdBlocks.length - 1];
+              const text = lastBlock ? lastBlock.innerText.trim() : '';
+              const isLoading = !!document.querySelector('[class*="loading"], [class*="typing"]');
+              return { tokens: text ? [{ text, phase: 'answer' }] : [], complete: text.length > 0 && !isLoading, total: text ? 1 : 0, domText: text };
+            }
             const latest = window.__netBuffer?.getLatest();
             const tokens = latest?.sseTokens || [];
             const complete = latest?.complete || false;
-            return { tokens: tokens.map(t => ({ text: t.text, phase: t.phase })), complete, total: tokens.length };
-          });
+            return { tokens: tokens.map(t => ({ text: t.text, phase: t.phase })), complete, total: tokens.length, domText: '' };
+          }, useDomFallback);
 
           // Send new tokens
-          for (let i = lastTokenCount; i < state.total; i++) {
-            const token = state.tokens[i];
-            if (!token) continue;
-
-            const delta = {};
-            if (token.phase === 'thinking') {
-              delta.reasoning_content = token.text;
-            } else {
-              delta.content = token.text;
+          if (useDomFallback && state.domText) {
+            // DOM fallback: send only the diff (new characters since last poll)
+            if (state.domText.length > lastDomText.length) {
+              const newChars = state.domText.slice(lastDomText.length);
+              lastDomText = state.domText;
+              res.write(`data: ${JSON.stringify({ id: chatId, object: 'chat.completion.chunk', created: Math.floor(Date.now()/1000), model, choices: [{ index: 0, delta: { content: newChars }, finish_reason: null }] })}\n\n`);
             }
+          } else {
+            for (let i = lastTokenCount; i < state.total; i++) {
+              const token = state.tokens[i];
+              if (!token) continue;
 
-            res.write(`data: ${JSON.stringify({ id: chatId, object: 'chat.completion.chunk', created: Math.floor(Date.now()/1000), model, choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`);
+              const delta = {};
+              if (token.phase === 'thinking') {
+                delta.reasoning_content = token.text;
+              } else {
+                delta.content = token.text;
+              }
+
+              res.write(`data: ${JSON.stringify({ id: chatId, object: 'chat.completion.chunk', created: Math.floor(Date.now()/1000), model, choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`);
+            }
+            lastTokenCount = state.total;
           }
-          lastTokenCount = state.total;
 
           if (state.complete && state.total > 0) {
             // Collect all answer/thinking tokens for token counting and tool_calls parsing
@@ -464,20 +526,39 @@ Important: Only use tool calls when the task requires it. For normal questions, 
         res.end();
       } else {
         // Non-streaming: wait for complete response
+        // For gRPC providers (kimi), SSE hooks won't fire — use DOM fallback
+        const useDomFallback = providerAdapter === 'kimi' || provider.url.includes('deepseek.com');
         let answerText = '';
         let thinkingText = '';
 
         while (Date.now() - startTime < TIMEOUT_MS) {
           await page.waitForTimeout(1000);
 
-          const state = await page.evaluate(() => {
+          const state = await page.evaluate((domFallback) => {
             const latest = window.__netBuffer?.getLatest();
+            const netAnswer = window.__netBuffer?.getLatestTokens?.() || '';
+            const netThinking = window.__netBuffer?.getLatestThinking?.() || '';
+
+            if (domFallback && !netAnswer) {
+              // DOM fallback: only when SSE hooks didn't capture anything (gRPC or CDP issues)
+              const mdBlocks = document.querySelectorAll('[class*="markdown"], [class*="message-content"], .agent-chat-item, .ds-markdown');
+              const lastBlock = mdBlocks[mdBlocks.length - 1];
+              const domAnswer = lastBlock ? lastBlock.innerText.trim() : '';
+              const isLoading = !!document.querySelector('[class*="loading"], [class*="typing"], .ds-loading');
+              return {
+                answer: domAnswer,
+                thinking: netThinking,
+                complete: domAnswer.length > 0 && !isLoading,
+              };
+            }
+
+
             return {
-              answer: window.__netBuffer?.getLatestTokens?.() || '',
-              thinking: window.__netBuffer?.getLatestThinking?.() || '',
+              answer: netAnswer,
+              thinking: netThinking,
               complete: latest?.complete || false,
             };
-          });
+          }, useDomFallback);
 
           answerText = state.answer;
           thinkingText = state.thinking;
@@ -598,36 +679,6 @@ Important: Only use tool calls when the task requires it. For normal questions, 
   }
 });
 
-// === CDP Auto-Discovery ===
-async function discoverCDP() {
-  const http = require('http');
-  const endpoints = [
-    process.env.CDP_URL,
-    'http://localhost:9222',
-    'http://127.0.0.1:9222',
-    'http://localhost:9223',
-  ].filter(Boolean);
-  for (const endpoint of endpoints) {
-    try {
-      const url = new URL('/json/version', endpoint);
-      const version = await new Promise((resolve, reject) => {
-        const req = http.get(url.toString(), { timeout: 2000 }, (res) => {
-          let data = '';
-          res.on('data', chunk => data += chunk);
-          res.on('end', () => { try { resolve(JSON.parse(data)); } catch { reject(new Error('Invalid JSON')); } });
-        });
-        req.on('error', reject);
-        req.on('timeout', () => { req.destroy(); reject(new Error('Timeout')); });
-      });
-      if (version.webSocketDebuggerUrl) {
-        console.log(`[bridge] Found CDP at ${endpoint}: ${version.Browser}`);
-        return { endpoint, wsUrl: version.webSocketDebuggerUrl, browser: version.Browser };
-      }
-    } catch { /* next */ }
-  }
-  return null;
-}
-
 // === Browser management ===
 async function getOrCreateContext(provider) {
   if (!browser) {
@@ -644,7 +695,10 @@ async function getOrCreateContext(provider) {
     // Step 2: Launch if no CDP
     if (!browser) {
       try {
-        const launchOpts = { headless: HEADLESS };
+        const launchOpts = {
+          headless: HEADLESS,
+          args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+        };
         if (usingCloak) {
           if (process.env.CLOAK_HUMANIZE !== 'false') launchOpts.humanize = true;
           if (process.env.CLOAK_GEOIP) launchOpts.geoip = process.env.CLOAK_GEOIP;
@@ -663,8 +717,31 @@ async function getOrCreateContext(provider) {
 
   const key = provider.url;
   if (!contexts[key]) {
-    contexts[key] = await browser.newContext();
-    console.log(`[bridge] Context created for ${key}`);
+    const allContexts = browser.contexts();
+    // CDP mode: find context with a page matching this provider's hostname
+    let matched = null;
+    for (const ctx of allContexts) {
+      for (const pg of ctx.pages()) {
+        try {
+          if (pg.url().includes(new URL(provider.url).hostname)) {
+            matched = ctx;
+            break;
+          }
+        } catch {}
+      }
+      if (matched) break;
+    }
+    if (matched) {
+      contexts[key] = matched;
+      console.log(`[bridge] Reusing matching browser context for ${key}`);
+    } else if (allContexts.length > 0) {
+      // No matching context — use first (shares cookies), new page will navigate
+      contexts[key] = allContexts[0];
+      console.log(`[bridge] Using shared context for ${key} (no matching page found)`);
+    } else {
+      contexts[key] = await browser.newContext();
+      console.log(`[bridge] Context created for ${key}`);
+    }
   }
 
   return contexts[key];
