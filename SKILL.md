@@ -57,7 +57,7 @@ GLM Chat MCP is a browser-automation skill for consulting GLM, Qwen, and DeepSee
 3. **Переключиться на вкладку провайдера** — GLM: `chat.z.ai`, Qwen: `chat.qwen.ai`, DeepSeek: `chat.deepseek.com`, Kimi: `kimi.com`
 4. **Выбрать режим** — `browser_evaluate('window.__modeSwitch.switch("deepThink")')` или `browser_evaluate(filename='mode-switcher.js')` → `window.__modeSwitch.switch("agentSwarm")`
 5. **Загрузить файл (если нужно)** — `page.$('input[type="file"]').setInputFiles(path)` (GLM/Qwen/DeepSeek)
-6. **Отправить сообщение** — `browser_click` textarea → `browser_type` → `browser_press_key` Enter
+6. **Отправить сообщение** — `browser_evaluate('window.__adapter.send(\"text\")')` — устанавливает текст сразу в DOM (не использовать `browser_type` — он отправляет построчно при Enter)
 7. **Ожидание ответа** — Фаза 1: spinner/Stop (0-15с). Фаза 2: 2+ SVG-кнопки стабильны 3 сек
 8. **Прочитать ответ** — `browser_evaluate('window.__adapter.read()')` → `{ done, textLen, text, source, provider }`
 
@@ -119,6 +119,22 @@ glm-chat-mcp/
 - `browser_evaluate('window.__adapter.healthCheck()')` — проверка всех систем
 - `browser_evaluate('window.__session.status()')` — статус авторизации
 - `browser_evaluate('window.__netBuffer.stats()')` — статистика перехваченных запросов
+
+---
+
+## 🔄 Мультитурновые диалоги
+
+**⚠️ КРИТИЧНО: НЕ создавать новый чат для продолжения обсуждения!**
+
+Все провайдеры хранят контекст на сервере. При продолжении обсуждения той же темы:
+1. Оставайтесь на том же URL чата (`chat.z.ai/c/<UUID>`, `chat.qwen.ai/c/<UUID>`, `chat.deepseek.com/a/chat/s/<UUID>`, `kimi.com/chat/<UUID>`)
+2. Извлеките UUID из адресной строки браузера: `browser_evaluate('location.href')`
+3. Сравните UUID текущей страницы с UUID из лога — если не совпадает, перейдите по нужному URL
+4. Если вкладка провайдера уже открыта с нужным UUID — используйте её
+5. Если чат был закрыт — найдите UUID в логе (см. шаг 2 Workflow) и перейдите по URL
+6. Отправляйте следующее сообщение в тот же чат через `window.__adapter.send()`
+
+**Никогда не открывать новый чат (`chat.z.ai/`, `chat.qwen.ai/`, `chat.deepseek.com/`, `kimi.com/`) без явной необходимости** — это теряет всю историю обсуждения.
 
 ---
 
