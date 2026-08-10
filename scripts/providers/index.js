@@ -1,7 +1,9 @@
 /**
- * scripts/providers/index.js v1.0
+ * scripts/providers/index.js v15.3
  * Factory and registry — createAdapter(name), ADAPTER_MAP, detect(), createForHost().
  * Re-exports everything from window.__providers namespace.
+ *
+ * v15.3: detect() делегирован в spec.js (window.__spec.detectProvider)
  *
  * MUST be loaded LAST (after base-adapter.js, spec.js, all adapters, openai-normalizer.js).
  * Adds: window.__providers.createAdapter, window.__providers.ADAPTER_MAP,
@@ -34,17 +36,12 @@
   }
 
   /**
-   * Detect provider from hostname
+   * Detect provider from hostname (delegated to spec.js)
    * @param {string} hostname - location.hostname
    * @returns {string} Provider key
    */
   function detect(hostname) {
-    if (!hostname) hostname = location.hostname;
-    if (hostname.includes('z.ai')) return 'glm';
-    if (hostname.includes('qwen')) return 'qwen';
-    if (hostname.includes('deepseek')) return 'deepseek';
-    if (hostname.includes('kimi')) return 'kimi';
-    return 'unknown';
+    return window.__spec.detectProvider(hostname);
   }
 
   /**

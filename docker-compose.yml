@@ -1,45 +1,26 @@
 services:
   glm-chat-bridge:
-    image: glm-chat-mcp-glm-chat-bridge:latest
+    build: .
     container_name: glm-chat-mcp
     ports:
       - "8102:8102"  # OpenAI API
-      - "5900:5900"  # VNC (native client)
     environment:
       - PORT=8102
-      - HEADLESS=false                     # Headed mode (visible via VNC)
+      - HEADLESS=true
       - CACHE=true
       - CACHE_TTL=300000
-      - API_KEYS=${API_KEYS:-}           # Comma-separated API keys
-      - RATE_LIMIT_MAX=30                # Requests per minute per key
-      - CLOAK=false                      # Enable CloakBrowser
-      - VNC_ENABLED=true                    # VNC server for viewing browser
-      - CDP_URL=                         # Connect to external browser
+      - API_KEYS=${API_KEYS:-}
+      - RATE_LIMIT_MAX=30
     volumes:
-      - browser-data:/app/data/browser   # Persistent cookies/session
-      - ./server/openai-bridge.js:/app/server/openai-bridge.js:ro  # Live code updates
+      - browser-data:/app/data/browser
     restart: unless-stopped
-    shm_size: '2gb'    # Required for Chromium
+    shm_size: '2gb'
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:8102/v1/status', r => process.exit(r.statusCode === 200 ? 0 : 1))"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 10s
-
-  novnc:
-    image: theasp/novnc:latest
-    container_name: glm-novnc
-    ports:
-      - "6080:8080"
-    entrypoint: ["/bin/bash", "-c"]
-    command:
-      - |
-        exec /usr/bin/websockify --web=/usr/share/novnc 8080 glm-chat-mcp:5900
-    depends_on:
-      glm-chat-bridge:
-        condition: service_healthy
-    restart: unless-stopped
 
 volumes:
   browser-data:

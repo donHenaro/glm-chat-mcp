@@ -1,5 +1,5 @@
 /**
- * server/openai-bridge.js v14.0
+ * server/openai-bridge.js v15.3.0
  * OpenAI-совместимый HTTP bridge — Express-сервер, транслирующий
  * запросы /v1/chat/completions через Playwright → браузер → провайдер.
  *

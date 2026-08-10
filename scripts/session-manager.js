@@ -1,16 +1,9 @@
 /**
- * scripts/session-manager.js v14.0
+ * scripts/session-manager.js v15.3
  * Session persistence через browser_evaluate — чтение/сохранение cookies + localStorage.
  *
- * ПРОБЛЕМА: каждый запуск требует повторной навигации и логина.
- * РЕШЕНИЕ: сохранять состояние сессии (cookies, localStorage) в лог-файл
- * и восстанавливать при следующем запуске через browser_evaluate.
- *
- * Ограничение: мы работаем через MCP Playwright, не имеем прямого доступа
- * к context.storageState(). Но можем читать/писать cookies и localStorage
- * через browser_evaluate.
- *
- * Вдохновлено: Playwright storageState() + Steel.dev session persistence
+ * v15.3: detectProvider и login selectors делегированы в spec.js (window.__spec)
+ * v14.0: Создан как session persistence механизм
  *
  * Вызов:
  * 1. browser_evaluate(filename='session-manager.js') → определить провайдера
@@ -25,11 +18,8 @@
   }
 
   // === Определяем провайдера ===
-  const host = location.hostname;
-  const provider = host.includes('z.ai') ? 'glm'
-                 : host.includes('qwen') ? 'qwen'
-                 : host.includes('deepseek') ? 'deepseek'
-                 : 'unknown';
+  const provider = window.__spec.detectProvider();
+  const sels = window.__spec.SELECTORS[provider] || {};
 
   // === API сессии ===
   window.__session = {
@@ -114,36 +104,21 @@
 
     /** Статус сессии — авторизован ли пользователь? */
     status() {
-      const indicators = {
-        glm: {
-          loggedIn: !!document.querySelector('[class*="avatar"], [class*="user-info"], [data-testid="user-menu"]')
-                 || !!document.querySelector('img[class*="avatar"]')
-                 || location.pathname !== '/login',
-          chatOpen: location.pathname.startsWith('/c/'),
-        },
-        qwen: {
-          loggedIn: !!document.querySelector('[class*="avatar"], [class*="user"]')
-                 || location.pathname !== '/login',
-          chatOpen: location.pathname.includes('/c/'),
-        },
-        deepseek: {
-          loggedIn: !!document.querySelector('[class*="avatar"], [class*="user"]')
-                 || location.pathname !== '/login',
-          chatOpen: location.pathname.includes('/a/chat/s/'),
-        },
-      };
-
-      const status = indicators[this.provider] || { loggedIn: false, chatOpen: false };
+      const sels = window.__spec.SELECTORS[this.provider] || {};
+      const loggedIn = !!document.querySelector(sels.login?.avatar)
+                     || location.pathname !== sels.login?.notLogin;
+      const chatOpen = location.pathname.startsWith(sels.chatOpen || '/c/');
 
       return {
         provider: this.provider,
         url: location.href,
-        ...status,
+        loggedIn,
+        chatOpen,
         hasCookies: document.cookie.length > 0,
         localStorageKeys: localStorage.length,
         sessionStorageKeys: sessionStorage.length,
-        hint: status.loggedIn
-            ? (status.chatOpen ? 'Session active, chat open' : 'Logged in, no chat open')
+        hint: loggedIn
+            ? (chatOpen ? 'Session active, chat open' : 'Logged in, no chat open')
             : 'Not logged in — user action required',
       };
     },

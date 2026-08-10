@@ -1,36 +1,54 @@
 /**
- * scripts/ai-extract.js v14.0
- * AI-powered extract fallback — извлечение ответа через DOM analysis
- * когда network buffer пуст И DOM-селекторы не сработали.
+ * scripts/ai-extract.js v16.0
+ * Unified response detection, extraction, AI-powered fallback + health-check.
+ * Мerged: response.js + ai-extract.js (selectors → spec.js as SSOT).
  *
- * ПРОБЛЕМА: при обновлении UI провайдеров селекторы ломаются,
- * а network hooks могут быть не установлены.
- * РЕШЕНИЕ: гибкий поиск текста ответа по эвристикам без привязки к селекторам.
+ * v16.0: response.js merged — detectResponseElements, readResponse,
+ *        isGLMResponseDone, extractLastResponse, healthCheck.
+ *        Str 5 (longest prose) scoped to chat container (was O(n) on all divs).
+ * v15.3: detectProvider и селекторы делегированы в spec.js (window.__spec)
+ * v14.0: Создан как Stagehand extract() + fallback-цепочки
  *
- * Вдохновлено: Stagehand extract() + наш опыт с fallback-цепочками
+ * Removed (no consumers): formatCheckpoint, needsContextRepeat, extractAllResponses.
  *
- * Стратегии (по приоритету):
- * 1. Accessibility tree (role="article", role="log")
- * 2. Message container heuristic (class*="message", class*="chat-message")
- * 3. Longest prose block (наибольший блок текста на странице)
- * 4. Last significant DOM change (MutationObserver record)
+ * Exports: window.__aiExtract
+ *   .extract()          — извлечь ответ, все стратегии
+ *   .read(provider)     — универсальное чтение (network → DOM)
+ *   .isDone(provider)   — проверка готовности ответа
+ *   .extractLast(provider) — текст + источник (network/dom)
+ *   .detect()           — детекция состояния страницы
+ *   .diagnose()         — полная диагностика
+ *   .healthCheck()      — проверка всех селекторов
  *
  * Вызов: browser_evaluate(filename='ai-extract.js')
  * Затем: browser_evaluate('window.__aiExtract.extract()')
- *        browser_evaluate('window.__aiExtract.detect()')
  */
 (() => {
   if (window.__aiExtract) {
     return { status: 'already_initialized' };
   }
 
-  const host = location.hostname;
-  const provider = host.includes('z.ai') ? 'glm'
-                 : host.includes('qwen') ? 'qwen'
-                 : host.includes('deepseek') ? 'deepseek'
-                 : 'unknown';
+  const spec = window.__spec;
+  const provider = spec.detectProvider();
 
-  // === Стратегия 1: Accessibility roles ===
+  // === Shared: fallback chain from spec.js ===
+  function detectResponseElements(p) {
+    const strategies = spec.getResponseStrategies(p);
+    for (let i = 0; i < strategies.length; i++) {
+      try {
+        const result = strategies[i]();
+        if (result.length > 0) {
+          if (i > 0) {
+            console.warn('[ai-extract] Primary selector failed for ' + p + ', used fallback #' + (i + 1));
+          }
+          return result;
+        }
+      } catch (e) { /* next strategy */ }
+    }
+    throw new Error('All response detection strategies failed for ' + p + ' — DOM changed?');
+  }
+
+  // === Strategy 2: Accessibility roles ===
   function extractByRole() {
     const roles = ['article', 'log', 'region', 'status'];
     for (const role of roles) {
@@ -46,7 +64,7 @@
     return null;
   }
 
-  // === Стратегия 2: Message container heuristic ===
+  // === Strategy 3: Message container heuristic ===
   function extractByMessageContainer() {
     const patterns = [
       '[class*="message"]',
@@ -61,15 +79,12 @@
       try {
         const els = document.querySelectorAll(sel);
         if (els.length > 0) {
-          // Берём последний элемент с достаточным текстом
           for (let i = els.length - 1; i >= 0; i--) {
             const text = (els[i].innerText || '').trim();
             if (text.length > 20) {
-              // Фильтруем — исключаем кнопки, навигацию и т.д.
               const btnCount = els[i].querySelectorAll('button').length;
               const linkCount = els[i].querySelectorAll('a').length;
               const wordCount = text.split(/\s+/).length;
-              // Хороший ответ: много слов, мало кнопок/ссылок
               if (wordCount > 5 && btnCount < 10 && linkCount < 10) {
                 return { text, source: `container:${sel}`, len: text.length };
               }
@@ -81,33 +96,71 @@
     return null;
   }
 
-  // === Стратегия 3: Longest prose block ===
-  function extractByLongestProse() {
-    // Ищем блочные элементы с наибольшим количеством текста
-    const blockSelectors = 'div, section, article, main, p, pre, code';
-    const blocks = document.querySelectorAll(blockSelectors);
+  // === Strategy 4: Spinner area ===
+  function extractNearSpinner(p) {
+    const sels = spec.SELECTORS[p] || spec.SELECTORS.glm;
+    const spinnerPatterns = [sels.generation.spinner, sels.generation.loading, sels.generation.thinking];
+
+    for (const sel of spinnerPatterns) {
+      const spinner = document.querySelector(sel);
+      if (!spinner) continue;
+
+      let container = spinner.parentElement;
+      for (let depth = 0; depth < 5 && container; depth++) {
+        const text = (container.innerText || '').trim();
+        if (text.length > 20) {
+          const cleanText = text.replace(/⏳|🔄|💬|.../g, '').trim();
+          if (cleanText.length > 20) {
+            return { text: cleanText, source: `near-spinner:${sel}`, len: cleanText.length };
+          }
+        }
+        container = container.parentElement;
+      }
+    }
+    return null;
+  }
+
+  // === Strategy 5: Longest prose — SCOPED to chat container ===
+  // OPTIMIZATION: вместо O(n) на весь DOM, ищем только внутри chat-container
+  function extractByLongestProse(p) {
+    const sels = spec.SELECTORS[p] || spec.SELECTORS.glm;
+
+    // 1. Find the chat container — scope search to it
+    let searchRoot = null;
+    const chatSelectors = [
+      '[class*="chat-container"]',
+      '[class*="chat"]',
+      '[class*="conversation"]',
+      '[role="log"]',
+      '[role="main"]',
+      'main',
+    ];
+    for (const cs of chatSelectors) {
+      const found = document.querySelector(cs);
+      if (found) { searchRoot = found; break; }
+    }
+    if (!searchRoot) searchRoot = document.body;
+
+    // 2. Scan only within the chat container
+    const blockSelectors = 'div, section, article, p, pre, code';
+    const blocks = searchRoot.querySelectorAll(blockSelectors);
     let best = null;
     let bestLen = 0;
 
     for (const block of blocks) {
-      // Пропускаем если элемент содержит много дочерних блочных элементов
-      // (навигация, хедер, футер)
       const children = block.querySelectorAll(blockSelectors);
       if (children.length > 20) continue;
 
       const text = (block.innerText || '').trim();
-      // Ищем значимый текст (не навигацию)
       const wordCount = text.split(/\s+/).length;
       const hasCodeBlocks = block.querySelectorAll('pre, code').length > 0;
       const hasMarkdown = text.includes('```') || text.includes('##');
 
-      // Критерии "ответа": достаточно длинный, содержит код или markdown
       const isProse = (wordCount > 20 && text.length > bestLen) ||
                       (hasCodeBlocks && text.length > 100) ||
                       (hasMarkdown && text.length > 100);
 
       if (isProse && text.length > bestLen) {
-        // Проверяем что не header/footer/nav
         const tag = block.tagName.toLowerCase();
         const cls = block.className || '';
         if (tag === 'header' || tag === 'footer' || tag === 'nav') continue;
@@ -126,36 +179,77 @@
     return null;
   }
 
-  // === Стратегия 4: Spinner area ===
-  // Ищем текст рядом со spinner — это текущий ответ
-  function extractNearSpinner() {
-    const spinnerPatterns = [
-      '[class*="spinner"]', '[class*="loading"]', '[class*="generating"]',
-      '[class*="typing"]', '[class*="thinking"]',
-    ];
-
-    for (const sel of spinnerPatterns) {
-      const spinner = document.querySelector(sel);
-      if (!spinner) continue;
-
-      // Ищем ближайший родительский контейнер с текстом
-      let container = spinner.parentElement;
-      for (let depth = 0; depth < 5 && container; depth++) {
-        const text = (container.innerText || '').trim();
-        if (text.length > 20) {
-          // Убираем текст spinner'а
-          const cleanText = text.replace(/⏳|🔄|💬|.../g, '').trim();
-          if (cleanText.length > 20) {
-            return { text: cleanText, source: `near-spinner:${sel}`, len: cleanText.length };
-          }
-        }
-        container = container.parentElement;
-      }
+  // === readResponse — universal read (from response.js) ===
+  function readResponse(p) {
+    // Priority 1: network buffer
+    const netTokens = window.__netBuffer?.getLatestTokens();
+    if (netTokens && netTokens.length > 0) {
+      return netTokens.replace(/^Thought Process\n/, '').trim();
     }
-    return null;
+    // Priority 2: DOM-selectors
+    const elements = detectResponseElements(p);
+    const last = elements[elements.length - 1];
+    if (!last) return '';
+    const text = last.innerText || '';
+    return text.replace(/^Thought Process\n/, '').trim();
   }
 
-  // === Основной API ===
+  // === isGLMResponseDone — readiness check ===
+  function isGLMResponseDone(p) {
+    const prose = detectResponseElements(p || 'glm');
+    const last = prose[prose.length - 1];
+    if (!last) return { done: false, textLen: 0 };
+
+    const parent = last.closest('[class*="message"]') || last.parentElement?.parentElement;
+    const btns = parent ? parent.querySelectorAll('button') : [];
+    const actionBtns = Array.from(btns).filter(b => b.className.includes('visible') && b.querySelector('svg'));
+    const spinner = !!document.querySelector(spec.SELECTORS.glm.generation.spinner);
+
+    const netLatest = window.__netBuffer?.getLatest();
+    const netDone = netLatest && !netLatest.error && netLatest.sseTokens?.length > 0;
+
+    return {
+      done: (actionBtns.length >= 2 && !spinner) || netDone,
+      textLen: last.innerText.length,
+      text: last.innerText,
+      spinner,
+      source: netDone ? 'network' : 'dom',
+    };
+  }
+
+  // === extractLastResponse — text + source info ===
+  function extractLastResponse(p) {
+    const netTokens = window.__netBuffer?.getLatestTokens();
+    if (netTokens && netTokens.length > 0) {
+      const text = netTokens.replace(/^Thought Process\n/, '').trim();
+      return { text, len: text.length, source: 'network' };
+    }
+    const text = readResponse(p);
+    return { text, len: text.length, source: 'dom' };
+  }
+
+  // === healthCheck — verify all selectors + network hooks ===
+  function healthCheck() {
+    const results = {};
+    for (const p of ['glm', 'qwen', 'deepseek', 'kimi']) {
+      try {
+        const elements = detectResponseElements(p);
+        results[p] = { ok: true, count: elements.length };
+      } catch (e) {
+        results[p] = { ok: false, error: e.message };
+      }
+    }
+    results._network = {
+      installed: !!window.__netHooksInstalled,
+      bufferLen: window.__netBuffer?.entries?.length || 0,
+    };
+    results._session = {
+      installed: !!window.__session,
+    };
+    return results;
+  }
+
+  // === Main API: window.__aiExtract ===
   window.__aiExtract = {
     provider,
 
@@ -164,21 +258,17 @@
      * @returns {{text, source, len, strategy}|null}
      */
     extract() {
-      // Приоритет 0: network buffer (если hooks установлены)
+      // Priority 0: network buffer
       const netTokens = window.__netBuffer?.getLatestTokens?.();
       if (netTokens && netTokens.length > 0) {
         return { text: netTokens, source: 'network', len: netTokens.length, strategy: 0 };
       }
 
-      // Приоритет 1: проверенные селекторы (из response.js)
+      // Priority 1: проверенные селекторы из spec.js
       try {
-        const strategies = {
-          glm: ['.markdown-prose', '[class*="prose"]', '[data-message-role="assistant"]'],
-          qwen: ['[class*="message-content"]', '.markdown-body', '[role="article"]'],
-          deepseek: ['.ds-markdown', '[class*="markdown"]', '[role="article"]'],
-        };
-        const sels = strategies[this.provider] || strategies.glm;
-        for (const sel of sels) {
+        const sels = spec.SELECTORS[this.provider] || spec.SELECTORS.glm;
+        const all = [sels.response.primary, ...sels.response.fallbacks];
+        for (const sel of all) {
           try {
             const els = document.querySelectorAll(sel);
             if (els.length > 0) {
@@ -192,32 +282,54 @@
         }
       } catch {}
 
-      // Приоритет 2: Accessibility roles
+      // Priority 2: Accessibility roles
       const byRole = extractByRole();
       if (byRole) return { ...byRole, strategy: 2 };
 
-      // Приоритет 3: Message containers
+      // Priority 3: Message containers
       const byContainer = extractByMessageContainer();
       if (byContainer) return { ...byContainer, strategy: 3 };
 
-      // Приоритет 4: Near spinner
-      const bySpinner = extractNearSpinner();
+      // Priority 4: Near spinner
+      const bySpinner = extractNearSpinner(this.provider);
       if (bySpinner) return { ...bySpinner, strategy: 4 };
 
-      // Приоритет 5: Longest prose
-      const byProse = extractByLongestProse();
+      // Priority 5: Longest prose (scoped to chat container)
+      const byProse = extractByLongestProse(this.provider);
       if (byProse) return { ...byProse, strategy: 5 };
 
       return null;
     },
 
     /**
-     * Детекция состояния страницы — что видно?
+     * Универсальное чтение ответа (network → DOM)
+     * @param {string} [p] — optional provider override
+     * @returns {string}
+     */
+    read(p) { return readResponse(p || this.provider); },
+
+    /**
+     * Проверка готовности ответа
+     * @param {string} [p] — optional provider override
+     * @returns {{done, textLen, text, spinner, source}}
+     */
+    isDone(p) { return isGLMResponseDone(p); },
+
+    /**
+     * Извлечь последний ответ с информацией об источнике
+     * @param {string} [p] — optional provider override
+     * @returns {{text, len, source}}
+     */
+    extractLast(p) { return extractLastResponse(p || this.provider); },
+
+    /**
+     * Детекция состояния страницы
      * @returns {{hasInput, hasResponse, hasSpinner, provider, strategies}}
      */
     detect() {
-      const hasInput = !!document.querySelector('#chat-input, textarea, [contenteditable]');
-      const hasSpinner = !!document.querySelector('[class*="spinner"], [class*="loading"]');
+      const sels = spec.SELECTORS[this.provider] || spec.SELECTORS.glm;
+      const hasInput = !!document.querySelector(sels.input.primary + ', ' + sels.input.fallbacks.join(', '));
+      const hasSpinner = !!document.querySelector(sels.generation.spinner + ', ' + sels.generation.loading);
 
       return {
         provider: this.provider,
@@ -228,8 +340,8 @@
         strategies: {
           role: !!extractByRole(),
           container: !!extractByMessageContainer(),
-          prose: !!extractByLongestProse(),
-          spinner: !!extractNearSpinner(),
+          prose: !!extractByLongestProse(this.provider),
+          spinner: !!extractNearSpinner(this.provider),
         },
       };
     },
@@ -255,11 +367,16 @@
           : 'No response found — all strategies exhausted',
       };
     },
+
+    /**
+     * Проверка всех селекторов + network hooks
+     */
+    healthCheck() { return healthCheck(); },
   };
 
   return {
     status: 'initialized',
     provider,
-    hint: 'Use window.__aiExtract.extract() / .detect() / .diagnose()',
+    hint: 'Use window.__aiExtract.extract() / .read() / .isDone() / .extractLast() / .detect() / .diagnose() / .healthCheck()',
   };
 })()

@@ -1,14 +1,10 @@
 /**
- * scripts/network-hooks.js v14.0
+ * scripts/network-hooks.js v15.3
  * Network interception через JS injection — перехват fetch/EventSource
  * на уровне страницы для захвата SSE-ответов провайдеров.
  *
- * ПРОБЛЕМА: response.js опирается на DOM-селекторы — хрупко, ломается при обновлении UI.
- * РЕШЕНИЕ: перехват HTTP-ответов на уровне страницы через инъекцию JS.
- *
- * Вдохновлено: page.route() из Playwright API + Chat2API SSE-streaming
- * Ограничение: мы работаем через MCP Playwright, не имеем прямого доступа к page.route(),
- * поэтому перехват реализован через page-level JS injection.
+ * v15.3: API_PATTERNS, detectProvider, parseSSETokens делегированы в spec.js (window.__spec)
+ * v14.0: Создан как network-level interception для SSE-ответов
  *
  * Вызов:
  * 1. browser_evaluate(filename='network-hooks.js') — установить хуки
@@ -26,25 +22,14 @@
   if (!window.__origEventSource) window.__origEventSource = window.EventSource;
   if (!window.__origXHR) window.__origXHR = window.XMLHttpRequest;
 
-  // === Конфигурация паттернов API-эндпоинтов по провайдерам ===
-  const API_PATTERNS = {
-    glm:      ['/api/v2/chat/completions', '/api/chat/', '/api/conversation/', '/completions', '/chat/'],
-    qwen:     ['/api/v2/chat/completions', '/api/chat/', '/api/conversation/', '/completions'],
-    deepseek: ['/api/v0/chat/completion', '/api/v0/chat/', '/api/chat/', '/completions'],
-  };
-
-  // Определяем провайдера по URL
-  const host = location.hostname;
-  const providerKey = host.includes('z.ai') ? 'glm'
-                    : host.includes('qwen') ? 'qwen'
-                    : host.includes('deepseek') ? 'deepseek'
-                    : 'unknown';
-  const patterns = API_PATTERNS[providerKey] || [];
+  // === Конфиг из spec.js ===
+  const providerKey = window.__spec.detectProvider();
+  const patterns = window.__spec.API_PATTERNS[providerKey] || [];
 
   // === Буфер сетевых ответов ===
   window.__netBuffer = {
     entries: [],       // [{url, status, body, timestamp, provider, sseTokens}]
-    _maxEntries: 50,   // ограничение памяти
+    _maxEntries: 50,   // ограничение памяти,
 
     add(entry) {
       this.entries.push(entry);
@@ -62,7 +47,7 @@
       
       // Автопарсинг: если sseTokens пустой но body есть — парсим body
       if (entry && (!entry.sseTokens || entry.sseTokens.length === 0) && entry.body) {
-        entry.sseTokens = parseSSETokens(entry.body);
+        entry.sseTokens = window.__spec.parseSSETokens(entry.body);
       }
       
       return entry;
@@ -101,37 +86,6 @@
       };
     }
   };
-
-  // === Вспомогательная: парсинг SSE из текста ===
-  function parseSSETokens(text) {
-    const tokens = [];
-    const lines = text.split('\n');
-    for (const line of lines) {
-      if (!line.startsWith('data:')) continue;
-      const data = line.slice(5).trim();
-      if (data === '[DONE]') break;
-      try {
-        const json = JSON.parse(data);
-        // GLM-специфичный формат: {type:"chat:completion", data:{delta_content:"...", phase:"thinking|answer"}}
-        const glmContent = json?.data?.delta_content;
-        if (glmContent) {
-          tokens.push({ text: glmContent, phase: json?.data?.phase || json?.phase || 'answer' });
-          continue;
-        }
-        // OpenAI-совместимый формат: choices[0].delta.content
-        const openaiContent = json?.choices?.[0]?.delta?.content
-                           || json?.choices?.[0]?.message?.content
-                           || json?.data?.content
-                           || json?.content
-                           || '';
-        if (openaiContent) tokens.push({ text: openaiContent, phase: 'answer' });
-      } catch {
-        // Не JSON — возможно plain text SSE
-        if (data) tokens.push({ text: data, phase: 'unknown' });
-      }
-    }
-    return tokens;
-  }
 
   // === Проверка: URL относится к чат-API? ===
   function isChatAPI(url) {
@@ -221,7 +175,7 @@
 
     if (isChatAPI(url)) {
       es.addEventListener('message', (e) => {
-        const sseTokens = parseSSETokens(e.data);
+        const sseTokens = window.__spec.parseSSETokens(e.data);
         window.__netBuffer.add({
           url,
           status: 200,
@@ -270,7 +224,7 @@
     const origLoad = xhr.onload;
     xhr.onload = function(event) {
       if (isChatAPI(xhr._netHookUrl || '')) {
-        const sseTokens = parseSSETokens(xhr.responseText);
+        const sseTokens = window.__spec.parseSSETokens(xhr.responseText);
         window.__netBuffer.add({
           url: xhr._netHookUrl,
           status: xhr.status,

@@ -199,48 +199,7 @@ Persistent sessions via cookies/localStorage:
 
 ---
 
-## 🔌 CDP Interception
 
-**File:** `scripts/cdp-intercept.js`
-
-For WebSocket-based providers:
-
-- Monkey-patches `WebSocket` for incoming/outgoing message capture
-- `window.__wsBuffer.extractResponse()` for chat response extraction
-- Supports SSE-over-WebSocket and JSON-over-WebSocket formats
-- Falls back to EventSource if WebSocket not available
-
----
-
-## 🛡️ CloakBrowser Integration
-
-**File:** `server/cloak-browser-mcp.js`
-
-Stealth Chromium with 58 C++ patches (26K⭐). Drop-in replacement for Playwright.
-
-### MCP Server (stdio JSON-RPC)
-
-6 tools: `navigate`, `click`, `type`, `evaluate`, `snapshot`, `press_key`
-
-Falls back to standard Playwright if CloakBrowser is not installed.
-
-### Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `CLOAK` | Enable CloakBrowser mode in OpenAI Bridge |
-| `CLOAK_HUMANIZE` | Human-like input delays |
-| `CLOAK_PROXY` | Proxy configuration |
-| `CLOAK_GEOIP` | GeoIP spoofing |
-
-### Installation
-
-```bash
-npm install cloakbrowser playwright-core
-npx @playwright/mcp --browser chromium  # CloakBrowser auto-detected
-```
-
----
 
 ## 🤖 AI-Extract Fallback Strategies
 
@@ -313,11 +272,6 @@ Each strategy logs its attempt and result for debugging.
 **Enable:** `.toolbar-icon.agent` → click (if not visible — already enabled)
 ⚠️ **beforeunload:** browser_automation may block Playwright. Solution: Copy/Regenerate detection.
 
-### Progress Monitoring
-
-→ `scripts/progress-monitor.js` → `monitorProgress('glm')`
-Returns: `{ thought, tools, textLen, mainText, done, spinner }`
-
 ### Agent Mode Hang Recovery
 
 If no spinner, no Stop, no Copy, and textarea is locked → **open a new chat** (`chat.z.ai/`). Do NOT try to resuscitate.
@@ -362,7 +316,6 @@ browser_evaluate('window.__adapter.healthCheck()')
 
 ### Anti-Bot Protection
 
-- **CloakBrowser** (recommended) — stealth Chromium, 58 C++ patches, 26K⭐
 - **playwright-extra** (fallback) — JS-level stealth patches
 - **DO NOT** use `page.fill()` — use human-like typing (50-150ms delays)
 - Random pauses between requests (2-5 sec)

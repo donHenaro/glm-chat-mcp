@@ -1,6 +1,8 @@
 /**
- * scripts/mode-switcher.js v1.0
+ * scripts/mode-switcher.js v15.3
  * Универсальный переключатель режимов провайдеров.
+ *
+ * v15.3: detectProvider делегирован в spec.js (window.__spec)
  *
  * Поддерживаемые режимы:
  *   GLM:       agent, chat, deepThink (on/off), search (on/off)
@@ -19,12 +21,7 @@
     return { status: 'already_initialized', modes: window.__modeSwitch.list() };
   }
 
-  const host = location.hostname;
-  const provider = host.includes('z.ai') ? 'glm'
-                 : host.includes('qwen') ? 'qwen'
-                 : host.includes('deepseek') ? 'deepseek'
-                 : host.includes('kimi') ? 'kimi'
-                 : 'unknown';
+  const provider = window.__spec.detectProvider();
 
   // === Спецификации режимов по провайдерам ===
   const MODE_SPECS = {
