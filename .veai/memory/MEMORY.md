@@ -1,2 +1,3 @@
 - [user-refactoring-preferences](user-refactoring-preferences-e35cb1ea2be1.md) — User requires GLM consultation before any refactoring in glm-chat-mcp, step-by-step with expert review
 - [glm-refactoring-plan](glm-refactoring-plan-6622b8dcdb98.md) — GLM refactoring v15.3 COMPLETE: 7 steps — dead code, spec.js, ai-extract/bridge/Docker. All implementations detailed
+- [interaction-rules-providers](interaction-rules-providers-b4070b5f849d.md) — Interaction rules: auth prompt, GLM v5.2 default, separate browser tabs per provider
